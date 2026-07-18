@@ -73,23 +73,3 @@ RB-CMD のないステップは手動ステップになる。
 画面やダッシュボードなどコマンド化できない確認をここに書く。
 実行時はこの説明が表示され、作業者が y を入力するまで次へ進まない
 (確認時刻と作業者名がログに記録される)。
-
-# RB-ROLLBACK
-
-## 作業ファイルの削除(切り戻し)
-
-### RB-DESCRIPTION
-この見出し(# RB-ROLLBACK)以降は切り戻しセクション。通常実行では走らず、
-`runbook run --rollback samples/sample_procedure.md` でのみ実行される。
-本編が中断したときは、実行方法が自動で案内される(自動では実行されない)。
-
-### RB-CMD
-```bash
-rm -f {{TARGET_DIR}}/runbook_sample.txt
-ls {{TARGET_DIR}}/runbook_sample.txt 2>&1 || echo "removed"
-```
-
-### RB-EXPECTED
-```
-out("removed")
-```

@@ -4,8 +4,7 @@
     runbook run  -i 手順書.md           逐次インタラクティブ実行
     runbook run  --only 3 手順書.md     ステップ指定実行(例: --only 1,3-5)
     runbook run  --from 2 --to 4 ...    範囲指定
-    runbook run  --rollback 手順書.md   切り戻しセクション(# RB-ROLLBACK)の実行
-    runbook run  --start-from 5 ...     ステップ5から再開(share_env なら環境変数も復元)
+    runbook run  --start-from 5 ...     ステップ5から再開(直近実行の env_overlay.sh から環境変数も復元)
     runbook run  --yes --operator 名前  実行前確認・作業者入力の省略(非対話実行用)
     runbook list 手順書.md              ステップ一覧表示
     runbook check 手順書.md             書式・基準式・変数・参照パスの検証のみ
@@ -13,6 +12,11 @@
 
 実行開始前にはサマリー(タイトル・対象ステップ・変数・インベントリ)を表示して
 確認を挟み(--yes でスキップ)、作業者名(必須)・確認者名(任意)を記録する。
+
+ステップ間の環境変数引き継ぎ(export/unset の差分オーバーレイ)は設定なしで
+常時有効。中断シグナル(SIGINT/SIGTERM/SIGHUP)は実行中の子プロセスへ転送し、
+証跡(run.log/result.json)を確定してから終了する。切り戻し実行機能は v0.5.0 で
+削除された(切り戻しは別ファイルの手順書として運用する。04 章 §3.6)。
 """
 
 from __future__ import annotations
@@ -20,22 +24,27 @@ from __future__ import annotations
 import argparse
 import re
 import shutil
+import signal
 import sys
 from datetime import datetime
 from pathlib import Path
 
-from rich.console import Console
 from rich.markup import escape
-from rich.table import Table
-from rich.text import Text
-from rich import box
 
 from . import __version__, criteria, parser
+from .artifacts import RunArtifacts, atomic_write_text
+from .envstate import EnvManager
 from .executor import StepRecord, parse_ansible_host_results, run_command
-from .logger import RunLogger
-
-# soft_wrap: 長い行に強制改行を入れない(tee 等でテキスト保存しても行が崩れない)
-console = Console(highlight=False, soft_wrap=True)
+from .render import (
+    MASK,
+    _MATRIX_LEGEND,
+    console,
+    host_results_logline,
+    print_host_matrix,
+    print_tree_item,
+    show_step_header,
+    step_table,
+)
 
 
 def parse_step_selection(spec: str, max_n: int) -> set[int]:
@@ -64,9 +73,6 @@ def parse_vars(pairs: list[str]) -> dict[str, str]:
     return out
 
 
-MASK = "*****"
-
-
 def make_mask(proc):
     """シークレットマスキング関数を作る(提案4)。
 
@@ -85,92 +91,6 @@ def make_mask(proc):
         return text
 
     return mask
-
-
-def print_tree_item(header: str, text: str, style: str = "") -> None:
-    lines = text.splitlines()
-    if not lines:
-        return
-    if style:
-        console.print(f"  ├ {header}: [{style}]{escape(lines[0])}[/]")
-        for line in lines[1:]:
-            console.print(f"  │   [{style}]{escape(line)}[/]")
-    else:
-        console.print(f"  ├ {header}: {escape(lines[0])}")
-        for line in lines[1:]:
-            console.print(f"  │   {escape(line)}")
-
-
-def show_step_header(step, total: int, mask=lambda t: t) -> None:
-    console.print()
-    console.print(f"・ ステップ {step.number}/{total}: [bold #cfd3ea]{escape(step.title)}[/]")
-    if step.description:
-        print_tree_item("説明", step.description)
-    if step.runner == "manual":
-        console.print("  └ [bold #f2b94d]手動ステップ[/](コマンドなし。上記の作業を実施してください)")
-        return
-    if step.runner == "ansible":
-        console.print("  ├ コマンド (ansible ad-hoc / shellモジュール):")
-        for line in mask(step.remote_command).splitlines():
-            console.print(f"  │   $ {escape(line)}", style="cyan")
-        print_tree_item("実行コマンド", mask(step.command), style="dim")
-    elif step.runner == "playbook":
-        console.print("  ├ プレイブック (ansible-playbook):")
-        for line in mask(step.remote_command).splitlines():
-            console.print(f"  │   {escape(line)}", style="cyan")
-        print_tree_item("実行コマンド", mask(step.command), style="dim")
-    else:
-        console.print("  ├ コマンド:")
-        for line in mask(step.command).splitlines():
-            console.print(f"  │   $ {escape(line)}", style="cyan")
-    print_tree_item("正常性基準", mask(step.criteria), style="bold #8ea7ff")
-
-
-# ホスト別結果マトリックスのマーク: 状態 → (表示文字, スタイル)
-_MATRIX_MARKS = {
-    "ok": ("O", "bold #5fd9a4"),
-    "failed": ("X", "bold #ff6b60"),
-    "unreachable": ("!", "bold #f2b94d"),
-}
-_MATRIX_LEGEND = "[bold #5fd9a4]O[/]=成功  [bold #ff6b60]X[/]=失敗  [bold #f2b94d]![/]=到達不能  [dim]-[/]=対象外"
-_LOG_MARKS = {
-    "ok": "O",
-    "failed": "X",
-    "unreachable": "!",
-}
-
-
-def print_host_matrix(rows: list[tuple[str, dict]], label_header: str = "", indent: str = "") -> None:
-    """列=ホスト名、値=成功/失敗マークのマトリックスを表示する。
-
-    rows: (行ラベル, {ホスト名: 状態}) のリスト。1行なら単一ステップの結果、
-    複数行ならステップ×ホストの集約マトリックス。
-    """
-    hosts = sorted({h for _, results in rows for h in results})
-    table = Table(
-        box=box.SIMPLE,
-        border_style="#4a4f78",
-        header_style="bold #cfd3ea",
-        pad_edge=True,
-    )
-    table.add_column(label_header, style="bold")
-    for host in hosts:
-        table.add_column(Text(host), justify="center")
-    for label, results in rows:
-        cells = [Text(label)]
-        for host in hosts:
-            mark, style = _MATRIX_MARKS.get(results.get(host, ""), ("-", ""))
-            cells.append(Text(mark, style=style))
-        table.add_row(*cells)
-
-    with console.capture() as cap:
-        console.print(table)
-    for line in cap.get().splitlines():
-        console.print(f"{indent}{line}", markup=False)
-
-
-def host_results_logline(results: dict) -> str:
-    return " ".join(f"{h}={_LOG_MARKS.get(s, '-')}" for h, s in sorted(results.items()))
 
 
 def confirm_interactive(step) -> str:
@@ -219,7 +139,7 @@ def confirm_manual(step, allow_skip: bool) -> str:
             return "quit"
 
 
-def show_onfail_guidance(step, log) -> None:
+def show_onfail_guidance(step, art) -> None:
     """RB-ONFAIL(失敗時ガイダンス)を表示・記録する(提案B)"""
     if not step.onfail:
         return
@@ -227,61 +147,69 @@ def show_onfail_guidance(step, log) -> None:
     console.print("[bold #f2b94d]▶ 失敗時ガイダンス (RB-ONFAIL):[/]")
     for line in step.onfail.splitlines():
         console.print(f"  {escape(line)}", style="#f2b94d")
-    log.log("失敗時ガイダンス(RB-ONFAIL):")
-    log.log(step.onfail)
+    art.log("失敗時ガイダンス(RB-ONFAIL):")
+    art.log(step.onfail)
 
 
-def show_rollback_hint(proc) -> None:
-    """中断時に切り戻しセクションの実行方法を案内する(提案C。自動では実行しない)"""
-    console.print(
-        f"[bold #f2b94d]▶ この手順書には切り戻しセクションがあります"
-        f"({len(proc.rollback_steps)} ステップ)。切り戻す場合は次を実行:[/]")
-    console.print(f"    runbook run --rollback {proc.path}", markup=False)
-
-
-def show_run_summary(proc, steps, selected: set[int], mode: str, rollback: bool,
-                     mask=lambda t: t, start_from: int | None = None,
-                     resume_env_src=None) -> None:
+def show_run_summary(proc, steps, selected: set[int], mode: str, mask=lambda t: t,
+                     start_from: int | None = None, resume_env_src=None) -> None:
     """実行前サマリー(提案E)。手順書・対象・変数・インベントリの取り違えに気付くためのゲート"""
     inventories = sorted({inv for s in steps if s.number in selected for inv in s.inventories})
     n_manual = sum(1 for s in steps if s.number in selected and s.runner == "manual")
+
+    has_vars = bool(proc.vars)
+    has_secrets = bool(proc.secrets)
+    has_inventories = bool(inventories)
+    has_start_from = start_from is not None
+    # 最後に表示するブロックだけ "└" にする(それ以外は "├")。優先順位は表示順の逆。
+    last = ("start_from" if has_start_from else
+            "inventories" if has_inventories else
+            "secrets" if has_secrets else
+            "vars" if has_vars else
+            "target")
+
+    def conn(name: str) -> str:
+        return "└" if name == last else "├"
+
+    def sub(name: str) -> str:
+        # そのブロックが最後(└)なら、続く行は "│" ではなく空白で揃える
+        return "  │   " if name != last else "      "
+
     console.print()
     console.print("・ 実行前確認")
     console.print(f"  ├ 手順書: [bold #cfd3ea]{escape(proc.title)}[/] ({proc.path})")
-    if rollback:
-        console.print("  ├ [bold #ff6b60]切り戻し実行(--rollback): 切り戻しセクションのステップを実行します[/]")
     console.print(f"  ├ モード: {mode}", markup=False)
-    label = f"  ├ 実行対象: {len(selected)}/{len(steps)} ステップ"
+
+    label = f"  {conn('target')} 実行対象: {len(selected)}/{len(steps)} ステップ"
     if n_manual:
         label += f"(うち手動 {n_manual})"
     console.print(label, markup=False)
     for s in steps:
         if s.number in selected:
             tag = "(手動)" if s.runner == "manual" else ""
-            console.print(f"  │   {s.number}. {s.title}{tag}", markup=False)
-    if proc.vars:
-        console.print("  ├ 変数:")
+            console.print(f"{sub('target')}{s.number}. {s.title}{tag}", markup=False)
+
+    if has_vars:
+        console.print(f"  {conn('vars')} 変数:")
         for k, v in proc.vars.items():
             disp = MASK if k in proc.secrets else mask(v)
-            console.print(f"  │   {k} = {disp}", markup=False)
-    if proc.secrets:
-        console.print(f"  ├ 秘匿変数(値は表示・ログでマスク): {', '.join(proc.secrets)}", markup=False)
-        if proc.share_env:
-            console.print("  ├ [bold #f2b94d]注意: share_env が有効なため、export した値は "
-                          "shared_env.sh に平文で残ります(保管・削除ルールに注意)[/]")
-    if inventories:
-        console.print("  ├ 使用インベントリ:")
+            console.print(f"{sub('vars')}{k} = {disp}", markup=False)
+
+    if has_secrets:
+        console.print(f"  {conn('secrets')} 秘匿変数(値は表示・ログでマスク): {', '.join(proc.secrets)}",
+                      markup=False)
+        console.print(f"{sub('secrets')}[bold #f2b94d]注意: export した値は env_overlay.sh に平文で残ります"
+                      "(保管・削除ルールに注意)[/]")
+
+    if has_inventories:
+        console.print(f"  {conn('inventories')} 使用インベントリ:")
         for inv in inventories:
-            console.print(f"  │   {inv}", markup=False)
-    if start_from is not None:
-        console.print(f"  ├ 再開実行(--start-from): ステップ {start_from} から", markup=False)
+            console.print(f"{sub('inventories')}{inv}", markup=False)
+
+    if has_start_from:
+        console.print(f"  {conn('start_from')} 再開実行(--start-from): ステップ {start_from} から", markup=False)
         if resume_env_src:
-            console.print(f"  ├ 環境変数の復元元: {resume_env_src}", markup=False)
-    if not rollback:
-        rb = f"あり({len(proc.rollback_steps)} ステップ。中断時に案内)" if proc.rollback_steps else "なし"
-        console.print(f"  └ 切り戻しセクション: {rb}", markup=False)
-    else:
-        console.print("  └ (切り戻し実行)", markup=False)
+            console.print(f"{sub('start_from')}環境変数の復元元: {resume_env_src}", markup=False)
 
 
 def confirm_gate() -> bool:
@@ -317,12 +245,13 @@ def ask_names(args) -> tuple[str, str]:
     return operator, checker
 
 
-def _find_latest_shared_env(base_dir: str, log_name: str) -> Path | None:
-    """--start-from の環境復元用に、直近の実行ログディレクトリの shared_env.sh を探す。
+def _find_latest_env_overlay(base_dir: str, log_name: str) -> Path | None:
+    """--start-from の環境復元用に、直近の実行ログディレクトリの env_overlay.sh を探す。
 
     ディレクトリ名は <log_name>_YYYYMMDD_HHMMSS(同一秒の連続実行では _2 等の
-    連番付き)形式なので名前の降順 = 新しい順。
-    log_name を厳密に照合するため、"proc" の検索で "proc_rollback_..." は拾わない。
+    連番付き)形式なので名前の降順 = 新しい順。log_name を厳密に照合する
+    (例えば "proc" で検索したときに "proc2_..." のような無関係なディレクトリを
+    拾わないようにするため)。
     """
     base = Path(base_dir)
     if not base.is_dir():
@@ -330,20 +259,27 @@ def _find_latest_shared_env(base_dir: str, log_name: str) -> Path | None:
     pat = re.compile(re.escape(log_name) + r"_\d{8}_\d{6}(_\d+)?$")
     for d in sorted((d for d in base.iterdir() if d.is_dir() and pat.fullmatch(d.name)),
                     reverse=True):
-        f = d / "shared_env.sh"
+        f = d / "env_overlay.sh"
         if f.is_file():
             return f
     return None
 
 
+class SignalInterrupt(Exception):
+    """SIGTERM / SIGHUP 受信を表す例外(SIGINT は既定の KeyboardInterrupt のまま扱う)"""
+
+    def __init__(self, signum: int):
+        self.signum = signum
+        super().__init__(f"signal {signum} received")
+
+
+def _raise_signal_interrupt(signum: int, frame) -> None:
+    raise SignalInterrupt(signum)
+
+
 def cmd_run(args: argparse.Namespace) -> int:
     proc = parser.parse_file(args.file, parse_vars(args.var))
-    if args.rollback:
-        if not proc.rollback_steps:
-            raise ValueError(f"{proc.path}: 切り戻しセクション(# RB-ROLLBACK)がありません")
-        steps = proc.rollback_steps
-    else:
-        steps = proc.steps
+    steps = proc.steps
     total = len(steps)
 
     # 提案8軽量版: --start-from N(中断したステップからの再開)
@@ -365,26 +301,28 @@ def cmd_run(args: argparse.Namespace) -> int:
     if not selected:
         raise ValueError("実行対象のステップがありません")
 
-    log_name = proc.path.stem + ("_rollback" if args.rollback else "")
+    log_name = proc.path.stem
 
-    # --start-from + share_env: 前回実行の環境変数(shared_env.sh)を復元する。
-    # 途中再開するステップが前段の export に依存している可能性があるため、
-    # 復元元が見つからなければ実行前にエラーにする(fail-loud)。
-    resume_env_src: Path | None = None
-    if args.start_from is not None and proc.share_env:
-        resume_env_src = _find_latest_shared_env(args.log_dir, log_name)
-        if resume_env_src is None:
+    # --start-from: 環境変数引き継ぎは設定キーなしで常時有効なので、直近実行の
+    # env_overlay.sh を無条件で復元元として検索する。途中再開するステップが
+    # 前段の export に依存している可能性があるため、復元元が見つからなければ
+    # 実行前にエラーにする(fail-loud)。
+    resume_src: Path | None = None
+    if args.start_from is not None:
+        resume_src = _find_latest_env_overlay(args.log_dir, log_name)
+        if resume_src is None:
             raise ValueError(
-                f"--start-from: 環境変数の復元元(過去実行の shared_env.sh)が "
+                f"--start-from: 環境変数の復元元(過去実行の env_overlay.sh)が "
                 f"{args.log_dir} に見つかりません。前段の環境変数なしで実行してよい場合は "
                 f"--from {args.start_from} を使ってください")
 
+    envman = EnvManager()
     mask = make_mask(proc)
 
     # 提案E: 実行前サマリー確認(手順書・インベントリの取り違え防止ゲート)
     mode = "逐次インタラクティブ" if args.interactive else "一括"
-    show_run_summary(proc, steps, selected, mode, args.rollback, mask,
-                     start_from=args.start_from, resume_env_src=resume_env_src)
+    show_run_summary(proc, steps, selected, mode, mask,
+                     start_from=args.start_from, resume_env_src=resume_src)
     if not args.yes and not confirm_gate():
         console.print("[red]→ 実行を中止しました[/red]")
         return 130
@@ -392,171 +330,212 @@ def cmd_run(args: argparse.Namespace) -> int:
     # 提案D: 作業者・確認者の記録
     operator, checker = ask_names(args)
 
-    log = RunLogger(log_name, base_dir=args.log_dir, mask=mask)
-    log.meta = {
+    art = RunArtifacts(log_name, base_dir=args.log_dir, mask=mask)
+    art.meta = {
         "file": str(proc.path),
         "title": proc.title,
         "mode": "interactive" if args.interactive else "batch",
-        "rollback": args.rollback,
         "operator": operator,
         "checker": checker,
         "selected_steps": sorted(selected),
         "vars": {k: (MASK if k in proc.secrets else v) for k, v in proc.vars.items()},
         "secrets": proc.secrets,
-        "share_env": proc.share_env,
     }
     if args.start_from is not None:
-        log.meta["start_from"] = args.start_from
-        log.meta["resumed_env_from"] = str(resume_env_src) if resume_env_src else None
-    env_file = str(log.dir / "shared_env.sh") if proc.share_env else None
-    if resume_env_src:
-        shutil.copy(resume_env_src, env_file)
+        art.meta["start_from"] = args.start_from
+        art.meta["resumed_env_from"] = str(resume_src)
+
+    if resume_src:
+        shutil.copy(resume_src, art.dir / "env_overlay.sh")
+        envman.load_overlay_script((art.dir / "env_overlay.sh").read_text(encoding="utf-8"))
+    else:
+        art.write_env_overlay(envman.overlay_script())
+    # D5: 最初のステップが終わる前でも result.json が整形式で読めるよう、
+    # 実行開始時点で status="running" の初期状態を書いておく
+    art.save_result("running")
+
     console.print()
-    console.print(f"・ 実行開始: [bold #cfd3ea]{escape(proc.title)}[/]"
-                  + (" [bold #ff6b60](切り戻し)[/]" if args.rollback else ""))
+    console.print(f"・ 実行開始: [bold #cfd3ea]{escape(proc.title)}[/]")
     console.print(f"  ├ 作業者: {operator}" + (f" / 確認者: {checker}" if checker else " / 確認者: (なし)"),
                   markup=False)
-    if proc.share_env:
-        console.print(f"  ├ 環境変数共有: 有効 ({env_file})", markup=False)
-    if resume_env_src:
-        console.print(f"  ├ 環境変数を復元: {resume_env_src}", markup=False)
-    console.print(f"  └ ログ保存先: {log.dir}", markup=False)
-    log.log(f"手順書「{proc.title}」実行開始 ({proc.path})" + (" [切り戻し実行]" if args.rollback else ""))
-    log.log(f"作業者: {operator}  確認者: {checker or '(なし)'}")
-    log.log(f"対象ステップ: {sorted(selected)}")
+    if resume_src:
+        console.print(f"  ├ 環境変数を復元: {resume_src}", markup=False)
+    console.print(f"  └ ログ保存先: {art.dir}", markup=False)
+    art.log(f"手順書「{proc.title}」実行開始 ({proc.path})")
+    art.log(f"作業者: {operator}  確認者: {checker or '(なし)'}")
+    art.log(f"対象ステップ: {sorted(selected)}")
     if args.start_from is not None:
-        log.log(f"再開実行(--start-from): ステップ {args.start_from} から"
-                + (f"(環境変数を {resume_env_src} から復元)" if resume_env_src else ""))
+        art.log(f"再開実行(--start-from): ステップ {args.start_from} から"
+                f"(環境変数を {resume_src} から復元)")
 
     status = "completed"
     exit_code = 0
-    for step in steps:
-        rec = StepRecord(step.number, step.title, step.command, step.criteria)
-        if step.number not in selected:
-            continue
-        show_step_header(step, total, mask)
-        log.log(f"--- ステップ {step.number}: {step.title} ---")
-
-        # 提案A: 手動ステップ(RB-CMD なし)。説明を表示して作業者の完了確認を待つ
-        if step.runner == "manual":
-            log.log("手動ステップ(作業者の完了確認待ち)")
-            rec.started_at = datetime.now().isoformat(timespec="seconds")
-            action = confirm_manual(step, allow_skip=args.interactive)
-            rec.finished_at = datetime.now().isoformat(timespec="seconds")
-            if action == "done":
-                rec.status = "ok"
-                rec.detail = f"作業者({operator})が完了を確認"
-                log.add_record(rec)
-                log.log(f"手動確認: 完了(作業者: {operator}, 確認時刻: {rec.finished_at})")
-                console.print(f"  └ 結果: [bold #5fd9a4]✓ Completed[/] (手動確認 {rec.finished_at})")
+    try:
+        for step in steps:
+            rec = StepRecord(step.number, step.title, step.command, step.criteria)
+            if step.number not in selected:
                 continue
-            if action == "skip":
-                rec.status = "skipped"
-                rec.detail = "操作者がスキップ"
-                log.add_record(rec)
-                log.log("→ スキップ(操作者判断)")
-                console.print("[yellow]→ スキップしました[/yellow]")
-                continue
-            rec.status = "skipped"
-            rec.detail = "操作者が中断(手動ステップ未完了)"
-            log.add_record(rec)
-            log.log("→ 操作者が中断(手動ステップ未完了)")
-            console.print("[red]→ 中断しました[/red]")
-            show_onfail_guidance(step, log)
-            status = "aborted"
-            exit_code = 130
-            break
+            show_step_header(step, total, mask)
+            art.log(f"--- ステップ {step.number}: {step.title} ---")
 
-        log.log(f"コマンド: {step.command}")
-
-        if args.interactive:
-            action = confirm_interactive(step)
-            if action == "skip":
+            # 提案A: 手動ステップ(RB-CMD なし)。説明を表示して作業者の完了確認を待つ
+            if step.runner == "manual":
+                art.log("手動ステップ(作業者の完了確認待ち)")
+                rec.started_at = datetime.now().isoformat(timespec="seconds")
+                action = confirm_manual(step, allow_skip=args.interactive)
+                rec.finished_at = datetime.now().isoformat(timespec="seconds")
+                if action == "done":
+                    rec.status = "ok"
+                    rec.detail = f"作業者({operator})が完了を確認"
+                    art.add_record(rec)
+                    art.log(f"手動確認: 完了(作業者: {operator}, 確認時刻: {rec.finished_at})")
+                    console.print(f"  └ 結果: [bold #5fd9a4]✓ Completed[/] (手動確認 {rec.finished_at})")
+                    continue
+                if action == "skip":
+                    rec.status = "skipped"
+                    rec.detail = "操作者がスキップ"
+                    art.add_record(rec)
+                    art.log("→ スキップ(操作者判断)")
+                    console.print("[yellow]→ スキップしました[/yellow]")
+                    continue
                 rec.status = "skipped"
-                rec.detail = "操作者がスキップ"
-                log.add_record(rec)
-                log.log("→ スキップ(操作者判断)")
-                console.print("[yellow]→ スキップしました[/yellow]")
-                continue
-            if action == "quit":
-                rec.status = "skipped"
-                rec.detail = "操作者が中断"
-                log.add_record(rec)
-                log.log("→ 操作者が中断")
+                rec.detail = "操作者が中断(手動ステップ未完了)"
+                art.add_record(rec)
+                art.log("→ 操作者が中断(手動ステップ未完了)")
                 console.print("[red]→ 中断しました[/red]")
+                show_onfail_guidance(step, art)
                 status = "aborted"
                 exit_code = 130
                 break
 
-        started = datetime.now()
-        rec.started_at = started.isoformat(timespec="seconds")
-        console.print(f"  ├ 開始: {started:%Y-%m-%d %H:%M:%S}")
+            art.log(f"コマンド: {step.command}")
 
-        def echo(line: str, is_stderr: bool) -> None:
-            console.print(f"  │   {mask(line)}", style="red" if is_stderr else None, markup=False)
+            if args.interactive:
+                action = confirm_interactive(step)
+                if action == "skip":
+                    rec.status = "skipped"
+                    rec.detail = "操作者がスキップ"
+                    art.add_record(rec)
+                    art.log("→ スキップ(操作者判断)")
+                    console.print("[yellow]→ スキップしました[/yellow]")
+                    continue
+                if action == "quit":
+                    rec.status = "skipped"
+                    rec.detail = "操作者が中断"
+                    art.add_record(rec)
+                    art.log("→ 操作者が中断")
+                    console.print("[red]→ 中断しました[/red]")
+                    status = "aborted"
+                    exit_code = 130
+                    break
 
-        result = run_command(step.command, timeout=step.timeout, cwd=step.cwd,
-                             on_line=echo, env_file=env_file)
-        finished = datetime.now()
-        rec.finished_at = finished.isoformat(timespec="seconds")
-        rec.rc = result.rc
-        rec.duration = round(result.duration, 3)
-        rec.stdout = result.stdout
-        rec.stderr = result.stderr
-        log.log(f"終了コード: {result.rc}  所要時間: {rec.duration}s")
+            started = datetime.now()
+            rec.started_at = started.isoformat(timespec="seconds")
+            console.print(f"  ├ 開始: {started:%Y-%m-%d %H:%M:%S}")
 
-        if result.timed_out:
-            rec.status = "error"
-            rec.detail = f"タイムアウト({step.timeout}s)により強制終了"
-        else:
+            # D5: 逐次書き込み。シグナル中断時にも必ず close する。
+            files = art.open_step_files(step.number)
             try:
-                ok = criteria.evaluate(step.criteria, result.rc, result.stdout, result.stderr)
-                rec.status = "ok" if ok else "ng"
-                if not ok:
-                    rec.detail = "正常性基準を満たしませんでした"
-            except criteria.CriteriaError as e:
+                def echo(line: str, is_stderr: bool) -> None:
+                    console.print(f"  │   {mask(line.rstrip(chr(10)))}",
+                                  style="red" if is_stderr else None, markup=False)
+                    files.write(mask(line), is_stderr)
+
+                result = run_command(step.command, timeout=step.timeout, cwd=step.cwd,
+                                     on_line=echo, env=envman.child_env(), capture_env=True)
+            finally:
+                files.close()
+
+            # D3: ステップ終了直後の export 済み変数一式でオーバーレイを再生成
+            if result.env_snapshot is not None:
+                envman.update_from_snapshot(result.env_snapshot)
+                art.write_env_overlay(envman.overlay_script())
+
+            finished = datetime.now()
+            rec.finished_at = finished.isoformat(timespec="seconds")
+            rec.rc = result.rc
+            rec.duration = round(result.duration, 3)
+            rec.stdout = result.stdout
+            rec.stderr = result.stderr
+            art.log(f"終了コード: {result.rc}  所要時間: {rec.duration}s")
+            finished_disp = f"{finished:%Y-%m-%d %H:%M:%S}"
+
+            # D4: 中断シグナルにより子プロセスが終了した場合(操作者の意図的中断のため
+            # RB-ONFAIL は表示せず、判定・内訳もスキップする)
+            if result.interrupted is not None:
                 rec.status = "error"
-                rec.detail = str(e)
+                rec.detail = f"シグナル ({signal.Signals(result.interrupted).name}) により中断"
+                art.log(f"判定: エラー ({rec.detail})")
+                console.print(f"  ├ 終了: {finished_disp}")
+                print_tree_item("詳細", rec.detail, style="bold #ff6b60")
+                console.print(f"  └ 結果: [bold #ff6b60]✘ Failed[/] (rc={result.rc}, {rec.duration}s)")
+                console.print("[bold red]中断シグナルを受信したため、実行を中断します。[/]")
+                art.add_record(rec)
+                status = "aborted"
+                exit_code = 128 + result.interrupted
+                break
 
-        if step.runner in ("ansible", "playbook"):
-            rec.host_results = parse_ansible_host_results(result.stdout + "\n" + result.stderr)
-            rec.host_matrix = step.host_matrix
-            if step.host_matrix and rec.host_results:
-                console.print("  ├ ホスト別結果:")
-                print_host_matrix([("", rec.host_results)], indent="  │   ")
-                console.print(f"  │   {_MATRIX_LEGEND}")
-                log.log("ホスト別結果: " + host_results_logline(rec.host_results))
+            if result.timed_out:
+                rec.status = "error"
+                rec.detail = f"タイムアウト({step.timeout}s)により強制終了"
+            else:
+                try:
+                    ok = criteria.evaluate(step.criteria, result.rc, result.stdout, result.stderr)
+                    rec.status = "ok" if ok else "ng"
+                    if not ok:
+                        rec.detail = "正常性基準を満たしませんでした"
+                except criteria.CriteriaError as e:
+                    rec.status = "error"
+                    rec.detail = str(e)
 
-        log.add_record(rec)
-        finished_disp = f"{finished:%Y-%m-%d %H:%M:%S}"
-        if rec.status == "ok":
-            log.log("判定: OK")
-            console.print(f"  ├ 終了: {finished_disp}")
-            console.print(f"  └ 結果: [bold #5fd9a4]✓ Completed[/] (rc={result.rc}, {rec.duration}s)")
-        else:
-            log.log(f"判定: NG ({rec.detail})")
-            console.print(f"  ├ 終了: {finished_disp}")
-            print_tree_item("詳細", rec.detail, style="bold #ff6b60")
-            # 提案1: 判定の詳細診断(どの条件で落ちたかの内訳)
-            if rec.status == "ng":
-                breakdown = criteria.diagnose(step.criteria, result.rc, result.stdout, result.stderr)
-                if len(breakdown) >= 2:  # 条件が1つだけなら基準式そのものと同じ情報なので出さない
-                    rec.criteria_breakdown = [{"expr": t, "ok": ok} for t, ok in breakdown]
-                    console.print("  ├ 判定内訳:")
-                    log.log("判定内訳:")
-                    for text, ok in breakdown:
-                        mark = "[bold #5fd9a4]OK[/]" if ok else "[bold #ff6b60]NG[/]"
-                        console.print(f"  │   \\[{mark}] {escape(mask(text))}")
-                        log.log(f"  [{'OK' if ok else 'NG'}] {text}")
-            console.print(f"  └ 結果: [bold #ff6b60]✘ Failed[/] (rc={result.rc}, {rec.duration}s)")
-            console.print("[bold red]失敗したため、実行を中断します。[/]")
-            show_onfail_guidance(step, log)  # 提案B: 失敗時ガイダンス
-            status = "aborted"
-            exit_code = 1
-            break
+            if step.runner in ("ansible", "playbook"):
+                rec.host_results = parse_ansible_host_results(result.stdout + "\n" + result.stderr)
+                rec.host_matrix = step.host_matrix
+                if step.host_matrix and rec.host_results:
+                    console.print("  ├ ホスト別結果:")
+                    print_host_matrix([("", rec.host_results)], indent="  │   ")
+                    console.print(f"  │   {_MATRIX_LEGEND}")
+                    art.log("ホスト別結果: " + host_results_logline(rec.host_results))
+
+            art.add_record(rec)
+            if rec.status == "ok":
+                art.log("判定: OK")
+                console.print(f"  ├ 終了: {finished_disp}")
+                console.print(f"  └ 結果: [bold #5fd9a4]✓ Completed[/] (rc={result.rc}, {rec.duration}s)")
+            else:
+                art.log(f"判定: NG ({rec.detail})")
+                console.print(f"  ├ 終了: {finished_disp}")
+                print_tree_item("詳細", rec.detail, style="bold #ff6b60")
+                # 提案1: 判定の詳細診断(どの条件で落ちたかの内訳)
+                if rec.status == "ng":
+                    breakdown = criteria.diagnose(step.criteria, result.rc, result.stdout, result.stderr)
+                    if len(breakdown) >= 2:  # 条件が1つだけなら基準式そのものと同じ情報なので出さない
+                        rec.criteria_breakdown = [{"expr": t, "ok": ok} for t, ok in breakdown]
+                        console.print("  ├ 判定内訳:")
+                        art.log("判定内訳:")
+                        for text, ok in breakdown:
+                            mark = "[bold #5fd9a4]OK[/]" if ok else "[bold #ff6b60]NG[/]"
+                            console.print(f"  │   \\[{mark}] {escape(mask(text))}")
+                            art.log(f"  [{'OK' if ok else 'NG'}] {text}")
+                console.print(f"  └ 結果: [bold #ff6b60]✘ Failed[/] (rc={result.rc}, {rec.duration}s)")
+                console.print("[bold red]失敗したため、実行を中断します。[/]")
+                show_onfail_guidance(step, art)  # 提案B: 失敗時ガイダンス
+                status = "aborted"
+                exit_code = 1
+                break
+    except KeyboardInterrupt:
+        art.log("中断されました(SIGINT)")
+        console.print("\n[red]中断されました[/red]")
+        status = "aborted"
+        exit_code = 130
+    except SignalInterrupt as e:
+        art.log(f"中断されました(シグナル {signal.Signals(e.signum).name})")
+        console.print("\n[red]中断されました[/red]")
+        status = "aborted"
+        exit_code = 128 + e.signum
 
     # 集約マトリックス(host_matrix 有効なステップが2つ以上あるとき)
-    matrix_records = [r for r in log.records if r.host_matrix and r.host_results]
+    matrix_records = [r for r in art.records if r.host_matrix and r.host_results]
     if len(matrix_records) >= 2:
         console.print()
         console.print("・ 最終ホスト別結果マトリックス")
@@ -567,12 +546,9 @@ def cmd_run(args: argparse.Namespace) -> int:
         )
         console.print(f"  └ 記号解説: {_MATRIX_LEGEND}")
 
-    show_hint = status == "aborted" and not args.rollback and bool(proc.rollback_steps)
-    if show_hint:
-        log.log(f"切り戻し案内: runbook run --rollback {proc.path}")
-    log_dir = log.finalize(status)
+    log_dir = art.finalize(status)
     console.print()
-    n_skipped = sum(1 for r in log.records if r.status == "skipped")
+    n_skipped = sum(1 for r in art.records if r.status == "skipped")
     if status == "completed":
         if n_skipped:
             lbl = f"完了 (スキップ {n_skipped} ステップあり)"
@@ -585,35 +561,13 @@ def cmd_run(args: argparse.Namespace) -> int:
         style = "bold #ff6b60"
     console.print(f"・ 実行結果: [{style}]{lbl}[/]")
     console.print(f"  └ ログ保存先: {log_dir}")
-    if show_hint:
-        # 提案C: 中断時に切り戻しの実行方法を案内する(自動では実行しない)
-        show_rollback_hint(proc)
     return exit_code
-
-
-def _step_table(title: str, steps, mask=lambda t: t) -> Table:
-    table = Table(title=title)
-    table.add_column("No.", justify="right")
-    table.add_column("ステップ")
-    table.add_column("コマンド", overflow="fold")
-    table.add_column("正常性基準", overflow="fold")
-    for s in steps:
-        if s.runner == "manual":
-            table.add_row(str(s.number), s.title, "(手動ステップ)", "作業者の完了確認")
-            continue
-        cmd = mask(s.command)
-        cmd = cmd if len(cmd) <= 60 else cmd[:57] + "..."
-        table.add_row(str(s.number), s.title, cmd, mask(s.criteria))
-    return table
 
 
 def cmd_list(args: argparse.Namespace) -> int:
     proc = parser.parse_file(args.file, parse_vars(args.var))
     mask = make_mask(proc)
-    console.print(_step_table(f"{proc.title} ({proc.path})", proc.steps, mask))
-    if proc.rollback_steps:
-        console.print(_step_table("切り戻しセクション (runbook run --rollback で実行)",
-                                  proc.rollback_steps, mask))
+    console.print(step_table(f"{proc.title} ({proc.path})", proc.steps, mask))
     return 0
 
 
@@ -631,7 +585,7 @@ def _playbook_paths(line: str) -> list[str]:
     return paths
 
 
-def _check_paths(label: str, steps) -> list[str]:
+def _check_paths(steps) -> list[str]:
     """ステップが参照するパス(インベントリ / playbook / cwd)の存在を確認し、
     見つからないものを警告文のリストで返す。
 
@@ -640,7 +594,7 @@ def _check_paths(label: str, steps) -> list[str]:
     """
     warns = []
     for s in steps:
-        ctx = f"{label}ステップ{s.number}「{s.title}」"
+        ctx = f"ステップ{s.number}「{s.title}」"
         for inv in s.inventories:
             # "web01," のようなカンマ入りはインラインホストリストなのでパスではない
             if "," in inv:
@@ -664,51 +618,37 @@ def cmd_check(args: argparse.Namespace) -> int:
     except parser.ParseError as e:
         console.print(f"[bold red]NG[/bold red] {e}")
         return 1
-    sections = [("", proc.steps), ("切り戻し", proc.rollback_steps)]
-    for label, steps in sections:
-        for s in steps:
-            if s.runner == "manual":
-                continue  # 手動ステップに基準式はない
-            try:
-                criteria.validate(s.criteria)
-            except criteria.CriteriaError as e:
-                errors.append(f"{label}ステップ{s.number}「{s.title}」(L{s.line}): {e}")
+    for s in proc.steps:
+        if s.runner == "manual":
+            continue  # 手動ステップに基準式はない
+        try:
+            criteria.validate(s.criteria)
+        except criteria.CriteriaError as e:
+            errors.append(f"ステップ{s.number}「{s.title}」(L{s.line}): {e}")
     if errors:
         for e in errors:
             console.print(f"[bold red]NG[/bold red] {e}")
         return 1
     warnings_: list[str] = []
-    for label, steps in sections:
-        for s in steps:
-            if s.heading_number is not None and s.heading_number != s.number:
-                warnings_.append(
-                    f"{label}ステップ{s.number}「{s.title}」: "
-                    f"見出しの番号 {s.heading_number} が実際の順序 {s.number} と不一致です"
-                    f"(runbook renumber で振り直せます)")
-        warnings_ += _check_paths(label, steps)
+    for s in proc.steps:
+        if s.heading_number is not None and s.heading_number != s.number:
+            warnings_.append(
+                f"ステップ{s.number}「{s.title}」: "
+                f"見出しの番号 {s.heading_number} が実際の順序 {s.number} と不一致です"
+                f"(runbook renumber で振り直せます)")
+    warnings_ += _check_paths(proc.steps)
     for w in warnings_:
         console.print(f"[bold yellow]警告[/bold yellow] {escape(w)}")
     summary = f"{len(proc.steps)} ステップ"
-    if proc.rollback_steps:
-        summary += f" + 切り戻し {len(proc.rollback_steps)} ステップ"
     note = f"(警告 {len(warnings_)} 件)" if warnings_ else ""
     console.print(f"[bold green]OK[/bold green] {proc.path}: {summary}、書式・基準式に問題ありません{note}")
 
     if args.preview:
         mask = make_mask(proc)
-        for label, steps in sections:
-            if not steps:
-                continue
-            console.print()
-            console.print(f"・ 展開後コマンド プレビュー{'(切り戻しセクション)' if label else ''}")
-            for s in steps:
-                console.print(f"・ ステップ {s.number}: {s.title}", markup=False)
-                if s.runner == "manual":
-                    console.print("    (手動ステップ: 作業者の完了確認のみ)")
-                    continue
-                for line in mask(s.command).splitlines():
-                    console.print(f"    $ {escape(line)}", style="cyan")
-                console.print(f"    基準: {escape(mask(s.criteria))}", style="#8ea7ff")
+        console.print()
+        console.print(step_table(f"{proc.title} ({proc.path})", proc.steps, mask))
+        for s in proc.steps:
+            show_step_header(s, len(proc.steps), mask, preview=True)
     return 0
 
 
@@ -729,10 +669,6 @@ def cmd_renumber(args: argparse.Namespace) -> int:
     for line in lines:
         if re.match(r"^\s*```", line):
             in_fence = not in_fence
-        if not in_fence and parser._ROLLBACK_PATTERN.match(line):
-            n = 0  # 切り戻しセクションは独立して 1 から採番
-            out.append(line)
-            continue
         m = None if in_fence else re.match(r"^##\s+(.+?)\s*$", line)
         if m and not m.group(1).startswith("#"):
             n += 1
@@ -744,7 +680,8 @@ def cmd_renumber(args: argparse.Namespace) -> int:
             out.append(new_line)
         else:
             out.append(line)
-    path.write_text("\n".join(out) + "\n", encoding="utf-8")
+    # D7.3: 手順書ファイルと同じディレクトリ内の一時ファイルへ書いてからアトミックに rename
+    atomic_write_text(path, "\n".join(out) + "\n")
     console.print(f"[bold green]OK[/bold green] {path}: {total} ステップ中 {changed} 見出しを更新しました")
     return 0
 
@@ -767,10 +704,8 @@ def build_argparser() -> argparse.ArgumentParser:
     p_run.add_argument("--from", dest="from_", type=int, metavar="N", help="開始ステップ番号")
     p_run.add_argument("--to", type=int, metavar="N", help="終了ステップ番号")
     p_run.add_argument("--start-from", dest="start_from", type=int, metavar="N",
-                       help="ステップ N から最後まで再開実行する。share_env: true の手順書では"
-                            "直近実行の環境変数(shared_env.sh)を復元する(見つからなければエラー)")
-    p_run.add_argument("--rollback", action="store_true",
-                       help="切り戻しセクション(# RB-ROLLBACK 以降)のステップを実行する")
+                       help="ステップ N から最後まで再開実行する。直近実行の環境変数"
+                            "(env_overlay.sh)を復元する(見つからなければエラー)")
     p_run.add_argument("-y", "--yes", action="store_true",
                        help="実行前サマリーの確認をスキップする(非対話実行用)")
     p_run.add_argument("--operator", metavar="NAME",
@@ -800,6 +735,10 @@ def build_argparser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
+    # D4: SIGTERM/SIGHUP は例外化して中断処理(証跡の確定)に回す。
+    # SIGINT は Python 既定のハンドラのまま(KeyboardInterrupt として届く)。
+    signal.signal(signal.SIGTERM, _raise_signal_interrupt)
+    signal.signal(signal.SIGHUP, _raise_signal_interrupt)
     args = build_argparser().parse_args(argv)
     try:
         return args.func(args)
@@ -809,6 +748,9 @@ def main(argv: list[str] | None = None) -> int:
     except KeyboardInterrupt:
         console.print("\n[red]中断されました[/red]")
         return 130
+    except SignalInterrupt as e:
+        console.print("\n[red]中断されました[/red]")
+        return 128 + e.signum
 
 
 if __name__ == "__main__":

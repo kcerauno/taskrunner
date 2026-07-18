@@ -1,7 +1,10 @@
-"""cmd_run の機能テスト(手動ステップ / 作業者記録 / 実行前確認 / RB-ONFAIL / 切り戻し)"""
+"""cmd_run の機能テスト(手動ステップ / 作業者記録 / 実行前確認 / RB-ONFAIL / 環境変数引き継ぎ)"""
 
 import json
+import os
+import signal
 import textwrap
+import threading
 
 import pytest
 
@@ -138,53 +141,29 @@ def test_onfail_guidance_logged_on_failure(tmp_path):
     assert "エスカレーション" in run_log
 
 
-ROLLBACK_MD = """\
-    ## 本作業
+def test_rollback_heading_is_parse_error(tmp_path):
+    """v0.5.0 で切り戻し機能(# RB-ROLLBACK)は削除され、パースエラーになる"""
+    md = write_md(tmp_path, """\
+        ## 本作業
 
-    ### RB-CMD
-    ```bash
-    false
-    ```
+        ### RB-CMD
+        ```bash
+        false
+        ```
 
-    # RB-ROLLBACK
+        # RB-ROLLBACK
 
-    ## 切り戻し
+        ## 切り戻し
 
-    ### RB-CMD
-    ```bash
-    echo rolled back
-    ```
-"""
-
-
-def test_rollback_hint_on_abort(tmp_path, capsys):
-    md = write_md(tmp_path, ROLLBACK_MD)
+        ### RB-CMD
+        ```bash
+        echo rolled back
+        ```
+    """)
     rc = cli.main(["run", str(md), "--yes", "--operator", "山田",
                    "--log-dir", str(tmp_path / "logs")])
-    assert rc == 1
-    log_dir, _ = read_result(tmp_path / "logs")
-    run_log = (log_dir / "run.log").read_text(encoding="utf-8")
-    assert "--rollback" in run_log  # 切り戻し案内が記録される
-    assert "--rollback" in capsys.readouterr().out
-
-
-def test_rollback_run_executes_rollback_steps(tmp_path):
-    md = write_md(tmp_path, ROLLBACK_MD)
-    rc = cli.main(["run", "--rollback", str(md), "--yes", "--operator", "山田",
-                   "--log-dir", str(tmp_path / "logs")])
-    assert rc == 0
-    log_dir, result = read_result(tmp_path / "logs")
-    assert log_dir.name.startswith("proc_rollback_")
-    assert result["procedure"]["rollback"] is True
-    assert [s["title"] for s in result["steps"]] == ["切り戻し"]
-    assert result["status"] == "completed"
-
-
-def test_rollback_flag_without_section_is_error(tmp_path):
-    md = write_md(tmp_path, SIMPLE_MD)
-    rc = cli.main(["run", "--rollback", str(md), "--yes", "--operator", "山田",
-                   "--log-dir", str(tmp_path / "logs")])
     assert rc == 2
+    assert not (tmp_path / "logs").exists()
 
 
 def test_operator_required_without_tty(tmp_path, monkeypatch):
@@ -336,7 +315,8 @@ def test_check_inline_host_list_not_checked(tmp_path, capsys):
     assert "警告" not in capsys.readouterr().out
 
 
-def test_check_preview_shows_expanded_commands(tmp_path, capsys):
+def test_check_preview_shows_two_parts(tmp_path, capsys):
+    """check --preview は list と同一の一覧表(第1部)+ run と同一のステップ詳細(第2部)"""
     md = write_md(tmp_path, """\
         ```runbook
         vars:
@@ -354,23 +334,15 @@ def test_check_preview_shows_expanded_commands(tmp_path, capsys):
 
         ### RB-DESCRIPTION
         画面を確認する。
-
-        # RB-ROLLBACK
-
-        ## 戻し
-
-        ### RB-CMD
-        ```bash
-        echo rollback
-        ```
     """)
     rc = cli.main(["check", "--preview", str(md)])
     assert rc == 0
     out = capsys.readouterr().out
+    # 第1部: 一覧表(list と同形式)
+    assert "コマンド" in out and "正常性基準" in out
+    # 第2部: ステップ詳細(run と同形式)。手動ステップは未実行である旨の文言。
     assert "$ echo web01" in out  # 変数展開後のコマンド
-    assert "手動ステップ" in out
-    assert "切り戻しセクション" in out
-    assert "$ echo rollback" in out
+    assert "作業者の完了確認のみ" in out
 
 
 SECRET_MD = """\
@@ -455,6 +427,16 @@ def test_secret_masked_in_list_and_preview(tmp_path, capsys):
     assert "*****" in out
 
 
+def test_secrets_summary_note_shown_unconditionally(tmp_path, monkeypatch, capsys):
+    """環境変数引き継ぎは常時有効なので、secrets 宣言があれば無条件で注意表示する"""
+    md = write_md(tmp_path, SECRET_MD)
+    feed_input(monkeypatch, ["n"])  # ゲートで中止(サマリー表示だけ見る)
+    rc = cli.main(["run", str(md), "--operator", "山田", "--log-dir", str(tmp_path / "logs")])
+    assert rc == 130
+    out = capsys.readouterr().out
+    assert "env_overlay.sh に平文で残ります" in out
+
+
 START_FROM_MD = """\
     ## S1
 
@@ -481,10 +463,14 @@ START_FROM_MD = """\
 
 def test_start_from_runs_to_end(tmp_path):
     md = write_md(tmp_path, START_FROM_MD)
+    # 1回目: env_overlay.sh を用意するため全ステップ実行しておく
+    assert cli.main(["run", str(md), "--yes", "--operator", "山田",
+                     "--log-dir", str(tmp_path / "logs")]) == 0
     rc = cli.main(["run", str(md), "--start-from", "2", "--yes", "--operator", "山田",
                    "--log-dir", str(tmp_path / "logs")])
     assert rc == 0
-    _, result = read_result(tmp_path / "logs")
+    dirs = sorted((tmp_path / "logs").iterdir())
+    result = json.loads((dirs[-1] / "result.json").read_text(encoding="utf-8"))
     assert result["procedure"]["start_from"] == 2
     assert [s["number"] for s in result["steps"]] == [2, 3]
 
@@ -503,11 +489,7 @@ def test_start_from_out_of_range(tmp_path):
     assert rc == 2
 
 
-SHARE_ENV_MD = """\
-    ```runbook
-    share_env: true
-    ```
-
+ENV_OVERLAY_MD = """\
     ## トークン取得
 
     ### RB-CMD
@@ -529,11 +511,68 @@ SHARE_ENV_MD = """\
 """
 
 
-def test_start_from_restores_shared_env(tmp_path):
-    """share_env: true の手順書では --start-from が直近実行の環境変数を復元する"""
-    md = write_md(tmp_path, SHARE_ENV_MD)
+def test_env_overlay_carries_export_to_next_step(tmp_path):
+    """ステップ間の環境変数引き継ぎは常時有効(設定不要)。export した値が次ステップに見える"""
+    md = write_md(tmp_path, ENV_OVERLAY_MD)
+    rc = cli.main(["run", str(md), "--yes", "--operator", "山田",
+                   "--log-dir", str(tmp_path / "logs")])
+    assert rc == 0
+    log_dir, result = read_result(tmp_path / "logs")
+    assert result["steps"][1]["status"] == "ok"
+    overlay = (log_dir / "env_overlay.sh").read_text(encoding="utf-8")
+    assert "TOKEN" in overlay
+
+
+UNSET_MD = """\
+    ```runbook
+    vars:
+      DUMMY: x
+    ```
+
+    ## unset する
+
+    ### RB-CMD
+    ```bash
+    unset DUMMY_ENV_VAR_FOR_TEST || true
+    export DUMMY_ENV_VAR_FOR_TEST=seen
+    ```
+
+    ## 消えていることを確認
+
+    ### RB-CMD
+    ```bash
+    unset DUMMY_ENV_VAR_FOR_TEST
+    ```
+
+    ## 3度目、tombstone が効いていること
+
+    ### RB-CMD
+    ```bash
+    echo "value=${DUMMY_ENV_VAR_FOR_TEST:-gone}"
+    ```
+
+    ### RB-EXPECTED
+    ```
+    out("value=gone")
+    ```
+"""
+
+
+def test_env_overlay_unset_tombstone_persists(tmp_path):
+    """あるステップで unset した変数は、以降のステップにも unset のまま引き継がれる(tombstone)"""
+    md = write_md(tmp_path, UNSET_MD)
+    rc = cli.main(["run", str(md), "--yes", "--operator", "山田",
+                   "--log-dir", str(tmp_path / "logs")])
+    assert rc == 0
+    _, result = read_result(tmp_path / "logs")
+    assert result["steps"][-1]["status"] == "ok"
+
+
+def test_start_from_restores_env_overlay(tmp_path):
+    """--start-from が直近実行の env_overlay.sh(export/unset の差分)を復元する"""
+    md = write_md(tmp_path, ENV_OVERLAY_MD)
     logs = str(tmp_path / "logs")
-    # 1回目: 全ステップ実行(step1 の export が shared_env.sh に残る)
+    # 1回目: 全ステップ実行(step1 の export が env_overlay.sh に残る)
     assert cli.main(["run", str(md), "--yes", "--operator", "山田", "--log-dir", logs]) == 0
     # 2回目: ステップ2から再開。復元された TOKEN で基準を満たす
     assert cli.main(["run", str(md), "--start-from", "2", "--yes", "--operator", "山田",
@@ -543,11 +582,52 @@ def test_start_from_restores_shared_env(tmp_path):
     assert result["procedure"]["start_from"] == 2
     assert result["procedure"]["resumed_env_from"]
     assert result["steps"][0]["status"] == "ok"
+    assert "rollback" not in result["procedure"]
+    assert "share_env" not in result["procedure"]
 
 
-def test_start_from_share_env_without_previous_run_is_error(tmp_path):
-    md = write_md(tmp_path, SHARE_ENV_MD)
+def test_start_from_without_previous_run_is_error(tmp_path):
+    """環境変数引き継ぎは常時有効なので、過去実行がなければ --start-from は無条件でエラー"""
+    md = write_md(tmp_path, ENV_OVERLAY_MD)
     rc = cli.main(["run", str(md), "--start-from", "2", "--yes", "--operator", "山田",
                    "--log-dir", str(tmp_path / "logs")])
     assert rc == 2
     assert not (tmp_path / "logs").exists()
+
+
+def test_result_json_has_no_rollback_or_share_env_keys(tmp_path):
+    md = write_md(tmp_path, SIMPLE_MD)
+    rc = cli.main(["run", str(md), "--yes", "--operator", "山田",
+                   "--log-dir", str(tmp_path / "logs")])
+    assert rc == 0
+    _, result = read_result(tmp_path / "logs")
+    assert "rollback" not in result["procedure"]
+    assert "share_env" not in result["procedure"]
+
+
+SLEEP_MD = """\
+    ## 長いステップ
+
+    ### RB-CMD
+    ```bash
+    sleep 5
+    ```
+"""
+
+
+def test_sigterm_during_step_aborts_with_143_and_finalizes(tmp_path):
+    """ステップ実行中に SIGTERM を受信すると、証跡を確定した上で 128+15=143 で終了する"""
+    md = write_md(tmp_path, SLEEP_MD)
+    timer = threading.Timer(0.5, lambda: os.kill(os.getpid(), signal.SIGTERM))
+    timer.daemon = True
+    timer.start()
+    try:
+        rc = cli.main(["run", str(md), "--yes", "--operator", "山田",
+                       "--log-dir", str(tmp_path / "logs")])
+    finally:
+        timer.cancel()
+    assert rc == 143
+    log_dir, result = read_result(tmp_path / "logs")
+    assert result["status"] == "aborted"
+    assert result["steps"][0]["status"] == "error"
+    assert "SIGTERM" in result["steps"][0]["detail"]

@@ -1,6 +1,6 @@
 [project]
 name = "runbook"
-version = "0.1.0"
+version = "0.5.0"
 description = "Markdown手順書 自動実行フレームワーク"
 requires-python = ">=3.10"
 dependencies = [
