@@ -1,7 +1,0 @@
-Metadata-Version: 2.4
-Name: runbook
-Version: 0.1.0
-Summary: Markdown手順書 自動実行フレームワーク
-Requires-Python: >=3.10
-Requires-Dist: pyyaml>=6.0
-Requires-Dist: rich>=13.0

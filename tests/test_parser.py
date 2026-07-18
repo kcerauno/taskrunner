@@ -63,7 +63,6 @@ def test_runbook_fence_config(tmp_path):
         ```runbook
         vars:
           HOST: web01
-        share_env: true
         ansible:
           target: all
         ```
@@ -78,7 +77,6 @@ def test_runbook_fence_config(tmp_path):
     proc = parser.parse_file(p)
     assert proc.title == "手順書タイトル"  # タイトルは # 見出しから
     assert proc.vars == {"HOST": "web01"}
-    assert proc.share_env is True
     assert proc.steps[0].command == "echo web01"
 
 
@@ -249,23 +247,35 @@ def test_heading_number_stripped(tmp_path):
     assert (s3.title, s3.heading_number) == ("100台対応(番号でない先頭数字は保持)", None)
 
 
-def test_share_env_flag(tmp_path):
+def test_share_env_in_fence_is_silently_ignored(tmp_path):
+    """share_env は v0.5.0 で廃止。```runbook フェンスに書いても他の未知キーと
+    同様に黙って無視され、Procedure に影響しない"""
     p = write_md(tmp_path, """\
         ```runbook
+        vars:
+          HOST: web01
         share_env: true
         ```
         ## S1
 
         ### RB-CMD
         ```bash
-        true
+        echo {{HOST}}
         ```
     """)
-    assert parser.parse_file(p).share_env is True
+    proc = parser.parse_file(p)
+    assert not hasattr(proc, "share_env")
+    assert proc.vars == {"HOST": "web01"}
+    assert proc.steps[0].command == "echo web01"
 
 
-def test_share_env_default_false(tmp_path):
+def test_share_env_in_frontmatter_is_not_error(tmp_path):
+    """share_env は拒否リスト(vars/ansible/secrets)から外れたため、
+    frontmatter に書いてもエラーにならない(一般メタデータとして無視される)"""
     p = write_md(tmp_path, """\
+        ---
+        share_env: true
+        ---
         ## S1
 
         ### RB-CMD
@@ -273,23 +283,8 @@ def test_share_env_default_false(tmp_path):
         true
         ```
     """)
-    assert parser.parse_file(p).share_env is False
-
-
-def test_share_env_invalid_type(tmp_path):
-    p = write_md(tmp_path, """\
-        ```runbook
-        share_env: yes please
-        ```
-        ## S1
-
-        ### RB-CMD
-        ```bash
-        true
-        ```
-    """)
-    with pytest.raises(parser.ParseError, match="share_env"):
-        parser.parse_file(p)
+    proc = parser.parse_file(p)
+    assert not hasattr(proc, "share_env")
 
 
 def test_ansible_step(tmp_path):
@@ -644,6 +639,86 @@ def test_playbook_missing_inventory_is_error(tmp_path):
         parser.parse_file(p)
 
 
+def test_playbook_line_style_inline_invocation(tmp_path):
+    """行が `ansible-playbook` で始まれば行内指定スタイル: 残り部分をそのまま
+    起動指定として使い、設定側の -i/-l は付与しない"""
+    p = write_md(tmp_path, """\
+        ```runbook
+        vars:
+          A: "1"
+        ```
+        ## S1
+
+        ### RB-CMD
+        ```playbook
+        ansible-playbook -i inv.ini site.yml
+        ```
+
+        ### RB-LOCALDEF
+        ```yaml
+        ansible:
+          inventory: config_hosts.ini
+          target: web
+        ```
+    """)
+    s = parser.parse_file(p).steps[0]
+    assert s.command == "ansible-playbook -e '{\"A\": \"1\"}' -i inv.ini site.yml"
+    assert "config_hosts.ini" not in s.command
+    assert "-l" not in s.command.split()
+
+
+def test_playbook_line_style_inline_without_args_is_error(tmp_path):
+    """`ansible-playbook` のみの行(残り部分が空)はエラー"""
+    p = write_md(tmp_path, """\
+        ## S1
+
+        ### RB-CMD
+        ```playbook
+        ansible-playbook
+        ```
+    """)
+    with pytest.raises(parser.ParseError, match="行内指定"):
+        parser.parse_file(p)
+
+
+def test_playbook_line_style_mixed_with_config_style(tmp_path):
+    """行内指定スタイルと設定指定スタイルは 1 フェンス内で行単位に混在できる"""
+    p = write_md(tmp_path, """\
+        ## S1
+
+        ### RB-CMD
+        ```playbook
+        ansible-playbook -i inv_a.ini site.yml
+        deploy.yml
+        ```
+
+        ### RB-LOCALDEF
+        ```yaml
+        ansible:
+          inventory: inv_b.ini
+          target: web
+        ```
+    """)
+    s = parser.parse_file(p).steps[0]
+    cmds = s.command.split(" && ")
+    assert cmds[0] == "ansible-playbook -i inv_a.ini site.yml"
+    assert cmds[1] == "ansible-playbook -i inv_b.ini -l web deploy.yml"
+
+
+def test_playbook_line_style_inline_inventories_collected(tmp_path):
+    """行内指定行のインベントリもサマリー用に収集される"""
+    p = write_md(tmp_path, """\
+        ## S1
+
+        ### RB-CMD
+        ```playbook
+        ansible-playbook -i inv.ini site.yml
+        ```
+    """)
+    s = parser.parse_file(p).steps[0]
+    assert s.inventories == ["inv.ini"]
+
+
 def test_playbook_and_ansible_fence_mix_is_error(tmp_path):
     p = write_md(tmp_path, """\
         ```runbook
@@ -854,19 +929,13 @@ def test_onfail_section(tmp_path):
     assert "エスカレーション" in s.onfail
 
 
-def test_rollback_section(tmp_path):
-    """# RB-ROLLBACK 以降のステップは rollback_steps に分離され、番号も独立"""
+def test_rollback_heading_is_error(tmp_path):
+    """# RB-ROLLBACK(v0.5.0 で削除された切り戻し機能)がフェンス外にあれば
+    黙って通常見出しとして扱わずパースエラーにする"""
     p = write_md(tmp_path, """\
         # 手順書
 
         ## 通常1
-
-        ### RB-CMD
-        ```bash
-        true
-        ```
-
-        ## 通常2
 
         ### RB-CMD
         ```bash
@@ -879,70 +948,16 @@ def test_rollback_section(tmp_path):
 
         ### RB-DESCRIPTION
         手動で切り戻す
-
-        ## 戻し2
-
-        ### RB-CMD
-        ```bash
-        echo rollback
-        ```
     """)
-    proc = parser.parse_file(p)
-    assert proc.title == "手順書"
-    assert [s.title for s in proc.steps] == ["通常1", "通常2"]
-    assert [s.title for s in proc.rollback_steps] == ["戻し1", "戻し2"]
-    assert [s.number for s in proc.rollback_steps] == [1, 2]  # 独立採番
-    assert proc.rollback_steps[0].runner == "manual"
-
-
-def test_rollback_duplicated_is_error(tmp_path):
-    p = write_md(tmp_path, """\
-        ## S1
-
-        ### RB-CMD
-        ```bash
-        true
-        ```
-
-        # RB-ROLLBACK
-
-        ## 戻し
-
-        ### RB-CMD
-        ```bash
-        true
-        ```
-
-        # RB-ROLLBACK
-
-        ## 戻し2
-
-        ### RB-CMD
-        ```bash
-        true
-        ```
-    """)
-    with pytest.raises(parser.ParseError, match="RB-ROLLBACK.*複数"):
+    with pytest.raises(parser.ParseError) as exc_info:
         parser.parse_file(p)
-
-
-def test_rollback_without_steps_is_error(tmp_path):
-    p = write_md(tmp_path, """\
-        ## S1
-
-        ### RB-CMD
-        ```bash
-        true
-        ```
-
-        # RB-ROLLBACK
-    """)
-    with pytest.raises(parser.ParseError, match="RB-ROLLBACK の後にステップ"):
-        parser.parse_file(p)
+    message = str(exc_info.value)
+    assert "v0.5.0 で削除" in message
+    assert "別ファイル" in message
 
 
 def test_rollback_heading_inside_fence_ignored(tmp_path):
-    """フェンス内の # RB-ROLLBACK 行は区切りとして扱わない"""
+    """フェンス内の # RB-ROLLBACK 行は区切り(エラー要因)として扱わない"""
     p = write_md(tmp_path, """\
         ## S1
 
@@ -955,7 +970,6 @@ def test_rollback_heading_inside_fence_ignored(tmp_path):
     """)
     proc = parser.parse_file(p)
     assert len(proc.steps) == 1
-    assert proc.rollback_steps == []
 
 
 def test_ansible_inventories_collected(tmp_path):

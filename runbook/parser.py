@@ -30,18 +30,19 @@
     cwd: /var/tmp
     ```
 
-- 共通設定(title / vars / share_env / ansible / secrets)は最初の「## 」より前に置く
+- 共通設定(title / vars / ansible / secrets)は最初の「## 」より前に置く
   ```runbook フェンス(YAML)で定義する。
 - RB-CMD のないステップは「手動ステップ」(runner="manual")。目視確認や手作業を
   手順に組み込むためのもので、RB-DESCRIPTION が必須。実行時は説明を表示して
   作業者の完了確認を待つ。
 - 「### RB-ONFAIL」(省略可)は、そのステップが失敗して中断した瞬間に表示する
   作業者向けガイダンス(自由記述)。
-- 「# RB-ROLLBACK」見出し以降のステップは切り戻しセクション。通常実行では
-  走らず、`runbook run --rollback` でのみ実行される(番号も独立して 1 から)。
+- 「# RB-ROLLBACK」見出し(切り戻し機能)は v0.5.0 で削除された。フェンス外で
+  検出した場合はパースエラーとし、切り戻し手順は別ファイルの手順書として
+  作成するよう案内する。
 - frontmatter(ファイル先頭の --- 〜 ---)は一般的な Markdown メタデータとして
   読み飛ばすだけで、runbook は解釈しない。ただし runbook の設定キー
-  (vars / share_env / ansible / secrets)が入っている場合は、意図しない無視を防ぐため
+  (vars / ansible / secrets)が入っている場合は、意図しない無視を防ぐため
   エラーにする。
 - 「### RB-CMD」のコードフェンスが複数ある場合は連結して 1 コマンド列とする。
 - 「### RB-EXPECTED」省略時は `rc == 0`。
@@ -73,8 +74,8 @@ _SECTION_ALIASES = {
 }
 _SECTION_NAMES = "RB-DESCRIPTION/RB-CMD/RB-EXPECTED/RB-LOCALDEF/RB-ONFAIL"
 
-# 切り戻しセクションの区切り(レベル1見出し)。これ以降の ## ステップは
-# 通常実行では走らず、`runbook run --rollback` でのみ実行される。
+# v0.5.0 で削除された切り戻し機能の見出し。フェンス外で検出したら即エラーにする
+# (黙って通常ステップ・通常見出しとして扱わない。fail-loud 原則)。
 _ROLLBACK_PATTERN = re.compile(r"^#\s+RB-ROLLBACK\s*$", re.IGNORECASE)
 
 _VAR_PATTERN = re.compile(r"\{\{\s*([A-Za-z_][A-Za-z0-9_]*)\s*\}\}")
@@ -120,8 +121,6 @@ class Procedure:
     title: str
     vars: dict[str, str] = field(default_factory=dict)
     steps: list[Step] = field(default_factory=list)
-    share_env: bool = False  # 共通設定 share_env: true でステップ間の環境変数引き継ぎを有効化
-    rollback_steps: list[Step] = field(default_factory=list)  # # RB-ROLLBACK 以降のステップ(--rollback 専用)
     secrets: list[str] = field(default_factory=list)  # 共通設定 secrets: [VAR] で値を表示・ログからマスクする変数名
 
 
@@ -375,22 +374,37 @@ def _resolve_ansible_command(step: Step, defaults: dict, variables: dict[str, st
     step.command = " ".join(parts)
 
 
+_PLAYBOOK_INLINE_PATTERN = re.compile(r"^ansible-playbook(\s|$)")
+
+
 def _resolve_playbook_command(step: Step, defaults: dict, variables: dict[str, str]) -> None:
     """```playbook フェンスのステップを ansible-playbook コマンドに組み立てる。
 
-    フェンスの各行は「ansible-playbook に渡す引数列」そのもの。
-    プレイブックのパスに続けて -e KEY=VALUE などのオプションをそのまま書ける:
+    フェンスの各行は、行が `ansible-playbook` で始まるかどうかで 2 つのスタイルに
+    分かれる(行単位判定・1 フェンス内で混在可。ansible ad-hoc の行内指定 §7.3 と
+    対称: 「行が実行コマンド名で始まれば行内指定、始まらなければ設定指定」)。
+
+    設定指定スタイル: 行そのものを「プレイブックのパスに続けて書くオプション列」
+    として扱う:
 
         ```playbook
         deploy.yml -e HOGE=PIYO --check
         ```
 
-    行の内容はコントローラ側の値なので {{VAR}} のテキスト置換が効く(置換は
-    parse_file 側で実施済み)。手順書の変数は ad-hoc と同様 -e JSON でも渡すので、
-    プレイブック内の jinja2 からそのまま参照できる。行に書いた -e は自動付与の
-    -e より後ろに並ぶため、同名変数は行に書いた値が優先される。
-    target を指定した場合は -l(limit)として対象ホストを絞り込む。
-    複数行は && で連結し、1つでも失敗したら以降は実行されない。
+    行内指定スタイル: 行の `ansible-playbook` に続く残り部分を起動指定として
+    そのまま使い、設定側の inventory / target は付与しない(inventory 必須
+    チェックもしない):
+
+        ```playbook
+        ansible-playbook -i inventories/web.ini deploy.yml -e HOGE=PIYO --check
+        ```
+
+    いずれのスタイルも行の内容はコントローラ側の値なので {{VAR}} のテキスト置換が
+    効く(置換は parse_file 側で実施済み)。手順書の変数は ad-hoc と同様 -e JSON
+    でも渡すので、プレイブック内の jinja2 からそのまま参照できる。行に書いた -e は
+    自動付与の -e より後ろに並ぶため、同名変数は行に書いた値が優先される。
+    設定指定スタイルで target を指定した場合は -l(limit)として対象ホストを
+    絞り込む。複数行は && で連結し、1つでも失敗したら以降は実行されない。
     """
     ctx = f"ステップ{step.number}「{step.title}」"
     inventory, target, extra_args = _merge_ansible_cfg(step, defaults, variables, ctx)
@@ -405,6 +419,22 @@ def _resolve_playbook_command(step: Step, defaults: dict, variables: dict[str, s
     cmds = []
     used_inventories: list[str] = []
     for line in lines:
+        if _PLAYBOOK_INLINE_PATTERN.match(line):
+            # 行内指定: 起動指定をそのまま使い、設定側の inventory / target は
+            # 付与しない(ansible ad-hoc の行内指定 §7.3 と同じ扱い)。
+            rest = line[len("ansible-playbook"):].strip()
+            if not rest:
+                raise ParseError(f"{ctx}: 行内指定(ansible-playbook ...)の後に引数がありません: {line!r}")
+            base = ["ansible-playbook"]
+            if variables:
+                base += ["-e", shlex.quote(json.dumps(variables, ensure_ascii=False))]
+            base.append(rest)
+            if extra_args:
+                base.append(extra_args)
+            used_inventories += _extract_inventory_values(rest)
+            cmds.append(" ".join(base))
+            continue
+
         base = ["ansible-playbook"]
         # 行内に -i があればそちらを使う(設定側インベントリは付与しない)。
         # ansible は複数の -i を「結合」してしまうため、二重付与は事故のもと。
@@ -474,7 +504,7 @@ def substitute_vars(text: str, variables: dict[str, str], context: str) -> str:
 # runbook が解釈する共通設定キー。frontmatter にこれらが書かれていた場合は
 # 「書いたのに効いていない」事故を防ぐためエラーにする(それ以外の frontmatter は
 # 一般的な Markdown メタデータとして単に読み飛ばす)。
-_CONFIG_KEYS = {"vars", "share_env", "ansible", "secrets"}
+_CONFIG_KEYS = {"vars", "ansible", "secrets"}
 
 
 def _reject_config_in_frontmatter(frontmatter: dict) -> None:
@@ -489,7 +519,8 @@ def _reject_config_in_frontmatter(frontmatter: dict) -> None:
 def _extract_preamble_config(preamble_lines: list[str]) -> dict:
     """前書き(最初の ## より前)の ```runbook フェンスから共通設定を取り出す。
 
-    ```runbook フェンスの中身は YAML(title / vars / share_env / ansible / secrets)。
+    ```runbook フェンスの中身は YAML(title / vars / ansible / secrets)。
+    未知のキー(share_env など)は他の未知キーと同様に黙って無視する。
     コードフェンスは CommonMark 標準要素なので、どの Markdown プレビューでも
     確実に表示される。
     """
@@ -517,20 +548,19 @@ def parse_file(path: str | Path, extra_vars: dict[str, str] | None = None) -> Pr
     # ステップ分割("## " 見出し単位)。"# " はタイトル扱い。
     # 最初の "## " より前の行は前書き(preamble)として保持し、
     # ```runbook フェンス(手順書設定)の抽出に使う。
-    # "# RB-ROLLBACK" 見出し以降のステップは切り戻しセクション
-    # (通常実行では走らず --rollback でのみ実行)として分離する。
-    steps_raw: list[tuple[str, list[str], int, bool]] = []
+    # "# RB-ROLLBACK" 見出し(v0.5.0 で削除された切り戻し機能)がフェンス外に
+    # 現れたら、黙って通常見出しとして扱わず即エラーにする(fail-loud 原則)。
+    steps_raw: list[tuple[str, list[str], int]] = []
     preamble: list[str] = []
     current_title: str | None = None
     current_lines: list[str] = []
     current_start = 0
     in_fence = False
-    in_rollback = False
 
     def flush() -> None:
         nonlocal current_title, current_lines
         if current_title is not None:
-            steps_raw.append((current_title, current_lines, current_start, in_rollback))
+            steps_raw.append((current_title, current_lines, current_start))
         current_title = None
         current_lines = []
 
@@ -539,11 +569,9 @@ def parse_file(path: str | Path, extra_vars: dict[str, str] | None = None) -> Pr
             in_fence = not in_fence
         if not in_fence:
             if _ROLLBACK_PATTERN.match(line):
-                if in_rollback:
-                    raise ParseError(f"{path}: # RB-ROLLBACK(切り戻しセクション)が複数あります。1つにまとめてください")
-                flush()
-                in_rollback = True
-                continue
+                raise ParseError(
+                    f"{path}: 切り戻し機能(# RB-ROLLBACK)は v0.5.0 で削除されました。"
+                    f"切り戻し手順は別ファイルの手順書として作成してください")
             m2 = re.match(r"^##\s+(.+?)\s*$", line)
             if m2:
                 flush()
@@ -561,10 +589,8 @@ def parse_file(path: str | Path, extra_vars: dict[str, str] | None = None) -> Pr
             preamble.append(line)
     flush()
 
-    if not any(not is_rb for _, _, _, is_rb in steps_raw):
+    if not steps_raw:
         raise ParseError(f"{path}: ステップ(## 見出し)が 1 つもありません")
-    if in_rollback and not any(is_rb for _, _, _, is_rb in steps_raw):
-        raise ParseError(f"{path}: # RB-ROLLBACK の後にステップ(## 見出し)が 1 つもありません")
 
     meta = _extract_preamble_config(preamble)
     title = str(meta.get("title", "")) or title_heading
@@ -573,19 +599,17 @@ def parse_file(path: str | Path, extra_vars: dict[str, str] | None = None) -> Pr
     variables.update(extra_vars or {})
 
     steps: list[Step] = []
-    rollback_steps: list[Step] = []
-    for raw_title, raw_lines, start, is_rollback in steps_raw:
-        dest = rollback_steps if is_rollback else steps
+    for raw_title, raw_lines, start in steps_raw:
         heading_number, clean_title = split_heading_number(raw_title)
-        step = _parse_step(len(dest) + 1, clean_title, raw_lines, start)
+        step = _parse_step(len(steps) + 1, clean_title, raw_lines, start)
         step.heading_number = heading_number
-        dest.append(step)
+        steps.append(step)
 
     # 変数置換(コマンドと正常性基準に適用)。
     # ansible フェンスの中身は jinja2 の世界なのでテキスト置換しない。
     # 代わりに _resolve_ansible_command で全変数を -e として渡し、
     # ansible 側で同じ {{VAR}} 記法のまま解決させる。
-    for step in steps + rollback_steps:
+    for step in steps:
         ctx = f"ステップ{step.number}「{step.title}」"
         if step.runner != "ansible":
             step.command = substitute_vars(step.command, variables, ctx)
@@ -603,15 +627,11 @@ def parse_file(path: str | Path, extra_vars: dict[str, str] | None = None) -> Pr
             "共通設定(```runbook フェンス)の ansible に inventory は指定できません。"
             "インベントリは各ステップの RB-LOCALDEF(ansible: inventory)か"
             "行内(-i / 1行目の ansible 行)で毎回指定してください")
-    for step in steps + rollback_steps:
+    for step in steps:
         if step.runner == "ansible":
             _resolve_ansible_command(step, ansible_defaults, variables)
         elif step.runner == "playbook":
             _resolve_playbook_command(step, ansible_defaults, variables)
-
-    share_env = meta.get("share_env", False)
-    if not isinstance(share_env, bool):
-        raise ParseError("共通設定の share_env は true/false で指定してください")
 
     # secrets: 値を表示・ログからマスクする変数名の明示宣言。
     # プレフィックス等の暗黙の命名規則ではなく明示宣言方式(fail-loud):
@@ -625,4 +645,4 @@ def parse_file(path: str | Path, extra_vars: dict[str, str] | None = None) -> Pr
                              f"(共通設定の vars か --var で定義してください)")
 
     return Procedure(path=path, title=title or path.stem, vars=variables, steps=steps,
-                     share_env=share_env, rollback_steps=rollback_steps, secrets=secrets)
+                     secrets=secrets)
