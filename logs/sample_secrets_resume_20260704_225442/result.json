@@ -1,0 +1,57 @@
+{
+  "procedure": {
+    "file": "samples/sample_secrets_resume.md",
+    "title": "シークレットマスキングと再開実行のサンプル",
+    "mode": "batch",
+    "rollback": false,
+    "operator": "kobayashi",
+    "checker": "ff",
+    "selected_steps": [
+      1,
+      2
+    ],
+    "vars": {
+      "DB_PASS": "*****",
+      "DB_HOST": "db01"
+    },
+    "secrets": [
+      "DB_PASS"
+    ],
+    "share_env": true
+  },
+  "status": "completed",
+  "started_at": "2026-07-04T22:54:42",
+  "finished_at": "2026-07-04T22:54:42",
+  "steps": [
+    {
+      "number": 1,
+      "title": "認証トークンの取得(シークレットを使う)",
+      "command": "echo \"auth db01 password=*****\"\nexport TOKEN=\"tok-$(date +%s)\"\necho \"TOKEN=$TOKEN を取得した\"",
+      "criteria": "rc == 0 and out(\"password=*****\") and out(\"TOKEN=tok-\")",
+      "status": "ok",
+      "rc": 0,
+      "duration": 0.005,
+      "started_at": "2026-07-04T22:54:42",
+      "finished_at": "2026-07-04T22:54:42",
+      "detail": "",
+      "host_results": {},
+      "host_matrix": false,
+      "criteria_breakdown": []
+    },
+    {
+      "number": 2,
+      "title": "トークンの使用(--start-from の再開対象)",
+      "command": "echo \"using $TOKEN for db01\"",
+      "criteria": "rc == 0 and out(\"using tok-\")",
+      "status": "ok",
+      "rc": 0,
+      "duration": 0.004,
+      "started_at": "2026-07-04T22:54:42",
+      "finished_at": "2026-07-04T22:54:42",
+      "detail": "",
+      "host_results": {},
+      "host_matrix": false,
+      "criteria_breakdown": []
+    }
+  ]
+}

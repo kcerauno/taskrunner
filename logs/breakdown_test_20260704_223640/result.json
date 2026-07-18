@@ -1,0 +1,73 @@
+{
+  "procedure": {
+    "file": "samples/breakdown_test.md",
+    "title": "判定内訳(NG時の詳細診断)テスト手順",
+    "mode": "batch",
+    "rollback": false,
+    "operator": "kobayashi",
+    "checker": "ff",
+    "selected_steps": [
+      1,
+      2,
+      3
+    ],
+    "vars": {},
+    "share_env": false
+  },
+  "status": "aborted",
+  "started_at": "2026-07-04T22:36:40",
+  "finished_at": "2026-07-04T22:36:40",
+  "steps": [
+    {
+      "number": 1,
+      "title": "成功するステップ(OK時は内訳を表示しない)",
+      "command": "echo \"service is active (running)\"",
+      "criteria": "rc == 0 and out(\"active\") and not out(\"ERROR|FATAL\")",
+      "status": "ok",
+      "rc": 0,
+      "duration": 0.003,
+      "started_at": "2026-07-04T22:36:40",
+      "finished_at": "2026-07-04T22:36:40",
+      "detail": "",
+      "host_results": {},
+      "host_matrix": false,
+      "criteria_breakdown": []
+    },
+    {
+      "number": 2,
+      "title": "意図的に失敗するステップ(NG時に内訳を表示)",
+      "command": "echo \"service is active\"\necho \"ERROR: minor issue detected\"",
+      "criteria": "rc == 0 and out(\"active\") and\n(rc == 0 or rc == 2) and\nnot out(\"ERROR|FATAL\") and\n\"running\" in stdout",
+      "status": "ng",
+      "rc": 0,
+      "duration": 0.002,
+      "started_at": "2026-07-04T22:36:40",
+      "finished_at": "2026-07-04T22:36:40",
+      "detail": "正常性基準を満たしませんでした",
+      "host_results": {},
+      "host_matrix": false,
+      "criteria_breakdown": [
+        {
+          "expr": "rc == 0",
+          "ok": true
+        },
+        {
+          "expr": "out(\"active\")",
+          "ok": true
+        },
+        {
+          "expr": "rc == 0 or rc == 2",
+          "ok": true
+        },
+        {
+          "expr": "not out(\"ERROR|FATAL\")",
+          "ok": false
+        },
+        {
+          "expr": "\"running\" in stdout",
+          "ok": false
+        }
+      ]
+    }
+  ]
+}

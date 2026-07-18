@@ -1,0 +1,9 @@
+---
+# 変数の受け渡し確認用プレイブック
+- name: 変数表示プレイ
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: HOGE の値を表示
+      ansible.builtin.debug:
+        msg: "HOGE={{ HOGE }} (host={{ inventory_hostname }})"

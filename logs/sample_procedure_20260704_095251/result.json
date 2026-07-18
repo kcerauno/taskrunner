@@ -1,0 +1,58 @@
+{
+  "procedure": {
+    "file": "samples/sample_procedure.md",
+    "title": "サンプル手順書(動作確認用)",
+    "mode": "batch",
+    "selected_steps": [
+      1,
+      2,
+      3
+    ],
+    "vars": {
+      "TARGET_DIR": "/tmp",
+      "KEYWORD": "Linux"
+    },
+    "share_env": false
+  },
+  "status": "completed",
+  "started_at": "2026-07-04T09:52:51",
+  "finished_at": "2026-07-04T09:52:51",
+  "steps": [
+    {
+      "number": 1,
+      "title": "事前確認: ディスク使用状況",
+      "command": "df -h /tmp",
+      "criteria": "rc == 0 and out(\"Filesystem|ファイルシス\") and not out(\" 100%\")",
+      "status": "ok",
+      "rc": 0,
+      "duration": 0.003,
+      "started_at": "2026-07-04T09:52:51",
+      "finished_at": "2026-07-04T09:52:51",
+      "detail": ""
+    },
+    {
+      "number": 2,
+      "title": "OS情報の取得",
+      "command": "uname -a",
+      "criteria": "rc == 0 and out(\"Linux\")",
+      "status": "ok",
+      "rc": 0,
+      "duration": 0.004,
+      "started_at": "2026-07-04T09:52:51",
+      "finished_at": "2026-07-04T09:52:51",
+      "detail": ""
+    },
+    {
+      "number": 3,
+      "title": "作業ファイルの作成と確認",
+      "command": "echo \"runbook test $(date +%Y%m%d)\" > /tmp/runbook_sample.txt\ncat /tmp/runbook_sample.txt\nrm /tmp/runbook_sample.txt",
+      "criteria": "rc == 0 and \"runbook test\" in stdout and not err(\".\")",
+      "status": "ok",
+      "rc": 0,
+      "duration": 0.006,
+      "started_at": "2026-07-04T09:52:51",
+      "finished_at": "2026-07-04T09:52:51",
+      "detail": ""
+    }
+  ]
+}

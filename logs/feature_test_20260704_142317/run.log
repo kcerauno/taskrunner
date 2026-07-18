@@ -1,0 +1,8 @@
+[2026-07-04 14:23:17] 手順書「機能テスト手順(ad-hoc / playbook / 行内オプション / インベントリ切替)」実行開始 (samples/local_test/feature_test.md)
+[2026-07-04 14:23:17] 対象ステップ: [5]
+[2026-07-04 14:23:17] --- ステップ 5: ad-hoc: 行内指定(1行目 ansible 行) ---
+[2026-07-04 14:23:17] コマンド: ansible -e '{"INVENTORY": "samples/local_test/inventory.ini", "CHECK_LABEL": "機能テスト", "HOGE": "FUGA"}' db -i samples/local_test/inventory_db.ini -e HOGE=ADHOC -m shell -a 'echo "HOGE={{ HOGE }} on {{ inventory_hostname }}"'
+[2026-07-04 14:23:18] 終了コード: 0  所要時間: 0.816s
+[2026-07-04 14:23:18] ホスト別結果: db01=O db02=O
+[2026-07-04 14:23:18] 判定: OK
+[2026-07-04 14:23:18] 実行終了: completed

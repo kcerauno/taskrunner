@@ -1,0 +1,23 @@
+[2026-07-04 11:06:20] 手順書「ansible ローカル6ホスト検証手順」実行開始 (samples/local_test/ansible_local_test.md)
+[2026-07-04 11:06:20] 対象ステップ: [1, 2, 3, 4]
+[2026-07-04 11:06:20] --- ステップ 1: 全6ホストの疎通確認 ---
+[2026-07-04 11:06:20] コマンド: ansible all -i samples/local_test/inventory.ini -e '{"INVENTORY": "samples/local_test/inventory.ini", "CHECK_LABEL": "定期点検"}' -m shell -a 'echo "host=$(hostname) user=$(id -un)"'
+[2026-07-04 11:06:21] 終了コード: 0  所要時間: 1.087s
+[2026-07-04 11:06:21] ホスト別結果: db01=○ db02=○ mon01=○ web01=○ web02=○ web03=○
+[2026-07-04 11:06:21] 判定: OK
+[2026-07-04 11:06:21] --- ステップ 2: webservers グループのみ負荷確認 ---
+[2026-07-04 11:06:21] コマンド: ansible webservers -i samples/local_test/inventory.ini -e '{"INVENTORY": "samples/local_test/inventory.ini", "CHECK_LABEL": "定期点検"}' -f 6 -m shell -a uptime
+[2026-07-04 11:06:22] 終了コード: 0  所要時間: 0.816s
+[2026-07-04 11:06:22] ホスト別結果: web01=○ web02=○ web03=○
+[2026-07-04 11:06:22] 判定: OK
+[2026-07-04 11:06:22] --- ステップ 3: db01 単一ホストのディスク確認 ---
+[2026-07-04 11:06:22] コマンド: ansible db01 -i samples/local_test/inventory.ini -e '{"INVENTORY": "samples/local_test/inventory.ini", "CHECK_LABEL": "定期点検"}' -m shell -a 'df -h /'
+[2026-07-04 11:06:23] 終了コード: 0  所要時間: 0.803s
+[2026-07-04 11:06:23] ホスト別結果: db01=○
+[2026-07-04 11:06:23] 判定: OK
+[2026-07-04 11:06:23] --- ステップ 4: 手順書変数と jinja2 の混在確認 ---
+[2026-07-04 11:06:23] コマンド: ansible webservers -i samples/local_test/inventory.ini -e '{"INVENTORY": "samples/local_test/inventory.ini", "CHECK_LABEL": "定期点検"}' -m shell -a 'echo "{{CHECK_LABEL}}: {{ inventory_hostname }} は正常です"'
+[2026-07-04 11:06:24] 終了コード: 0  所要時間: 0.811s
+[2026-07-04 11:06:24] ホスト別結果: web01=○ web02=○ web03=○
+[2026-07-04 11:06:24] 判定: OK
+[2026-07-04 11:06:24] 実行終了: completed

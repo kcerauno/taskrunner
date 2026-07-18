@@ -1,0 +1,133 @@
+{
+  "procedure": {
+    "file": "samples/local_test/feature_test.md",
+    "title": "機能テスト手順(共通設定なし・全ステップ個別定義スタイル)",
+    "mode": "batch",
+    "selected_steps": [
+      1,
+      2,
+      3,
+      4,
+      5,
+      6
+    ],
+    "vars": {
+      "CHECK_LABEL": "機能テスト",
+      "HOGE": "FUGA"
+    },
+    "share_env": false
+  },
+  "status": "completed",
+  "started_at": "2026-07-04T18:11:11",
+  "finished_at": "2026-07-04T18:11:15",
+  "steps": [
+    {
+      "number": 1,
+      "title": "ad-hoc: 行内指定で全6ホストの疎通確認",
+      "command": "ansible -e '{\"CHECK_LABEL\": \"機能テスト\", \"HOGE\": \"FUGA\"}' all -i samples/local_test/inventory.ini -m shell -a 'echo \"{{CHECK_LABEL}}: host={{ inventory_hostname }}\"'",
+      "criteria": "rc == 0 and\nout(\"機能テスト: host=web01\") and out(\"機能テスト: host=web02\") and\nout(\"機能テスト: host=web03\") and out(\"機能テスト: host=db01\") and\nout(\"機能テスト: host=db02\") and out(\"機能テスト: host=mon01\") and\nnot out(\"UNREACHABLE|FAILED\")",
+      "status": "ok",
+      "rc": 0,
+      "duration": 1.178,
+      "started_at": "2026-07-04T18:11:11",
+      "finished_at": "2026-07-04T18:11:12",
+      "detail": "",
+      "host_results": {
+        "db01": "ok",
+        "db02": "ok",
+        "web01": "ok",
+        "web02": "ok",
+        "web03": "ok",
+        "mon01": "ok"
+      },
+      "host_matrix": true
+    },
+    {
+      "number": 2,
+      "title": "ad-hoc: RB-LOCALDEF で定義するスタイル",
+      "command": "ansible web -i samples/local_test/inventory_web.ini -e '{\"CHECK_LABEL\": \"機能テスト\", \"HOGE\": \"FUGA\"}' -m shell -a uptime",
+      "criteria": "rc == 0 and out(\"web01\") and out(\"web02\") and out(\"web03\") and\nnot out(\"db01|db02|mon01\") and not out(\"UNREACHABLE|FAILED\")",
+      "status": "ok",
+      "rc": 0,
+      "duration": 0.883,
+      "started_at": "2026-07-04T18:11:12",
+      "finished_at": "2026-07-04T18:11:13",
+      "detail": "",
+      "host_results": {
+        "web03": "ok",
+        "web02": "ok",
+        "web01": "ok"
+      },
+      "host_matrix": true
+    },
+    {
+      "number": 3,
+      "title": "playbook: 行内 -i と -e(実行時上書き)",
+      "command": "ansible-playbook -e '{\"CHECK_LABEL\": \"機能テスト\", \"HOGE\": \"FUGA\"}' -i samples/local_test/inventory_web.ini samples/local_test/show_var.yml -e HOGE=PIYO",
+      "criteria": "rc == 0 and out(\"HOGE=PIYO\") and not out(\"HOGE=FUGA\") and\nnot out(\"failed=[1-9]|unreachable=[1-9]\")",
+      "status": "ok",
+      "rc": 0,
+      "duration": 0.551,
+      "started_at": "2026-07-04T18:11:13",
+      "finished_at": "2026-07-04T18:11:13",
+      "detail": "",
+      "host_results": {
+        "web01": "ok",
+        "web02": "ok",
+        "web03": "ok"
+      },
+      "host_matrix": true
+    },
+    {
+      "number": 4,
+      "title": "playbook: 行ごとのインベントリ切替",
+      "command": "ansible-playbook -e '{\"CHECK_LABEL\": \"機能テスト\", \"HOGE\": \"FUGA\"}' -i samples/local_test/inventory_web.ini samples/local_test/show_var.yml && ansible-playbook -e '{\"CHECK_LABEL\": \"機能テスト\", \"HOGE\": \"FUGA\"}' -i samples/local_test/inventory_db.ini samples/local_test/show_var.yml -e HOGE=DB_RUN",
+      "criteria": "rc == 0 and\nout(\"HOGE=FUGA \\(host=web01\\)\") and out(\"HOGE=FUGA \\(host=web03\\)\") and\nout(\"HOGE=DB_RUN \\(host=db01\\)\") and out(\"HOGE=DB_RUN \\(host=db02\\)\") and\nnot out(\"failed=[1-9]|unreachable=[1-9]\")",
+      "status": "ok",
+      "rc": 0,
+      "duration": 1.13,
+      "started_at": "2026-07-04T18:11:13",
+      "finished_at": "2026-07-04T18:11:14",
+      "detail": "",
+      "host_results": {
+        "web01": "ok",
+        "web02": "ok",
+        "web03": "ok",
+        "db01": "ok",
+        "db02": "ok"
+      },
+      "host_matrix": true
+    },
+    {
+      "number": 5,
+      "title": "ad-hoc: 行内指定 + 行内 -e の優先確認",
+      "command": "ansible -e '{\"CHECK_LABEL\": \"機能テスト\", \"HOGE\": \"FUGA\"}' db -i samples/local_test/inventory_db.ini -e HOGE=ADHOC -m shell -a 'echo \"HOGE={{ HOGE }} on {{ inventory_hostname }}\"'",
+      "criteria": "rc == 0 and\nout(\"HOGE=ADHOC on db01\") and out(\"HOGE=ADHOC on db02\") and\nnot out(\"HOGE=FUGA\") and not out(\"web01|web02|web03|mon01\") and\nnot out(\"UNREACHABLE|FAILED\")",
+      "status": "ok",
+      "rc": 0,
+      "duration": 0.843,
+      "started_at": "2026-07-04T18:11:14",
+      "finished_at": "2026-07-04T18:11:15",
+      "detail": "",
+      "host_results": {
+        "db01": "ok",
+        "db02": "ok"
+      },
+      "host_matrix": true
+    },
+    {
+      "number": 6,
+      "title": "bash: ローカルステップとの混在確認",
+      "command": "echo \"local step on $(hostname)\"\nuname -a",
+      "criteria": "rc == 0 and \"local step on\" in stdout and out(\"Linux\")",
+      "status": "ok",
+      "rc": 0,
+      "duration": 0.004,
+      "started_at": "2026-07-04T18:11:15",
+      "finished_at": "2026-07-04T18:11:15",
+      "detail": "",
+      "host_results": {},
+      "host_matrix": false
+    }
+  ]
+}

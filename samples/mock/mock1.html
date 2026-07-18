@@ -1,0 +1,551 @@
+<title>runbook 出力デザイン比較</title>
+<style>
+  :root {
+    --bg: #eef0f0;
+    --surface: #ffffff;
+    --surface-2: #f5f6f5;
+    --text: #1b1e1d;
+    --text-muted: #5b615f;
+    --line: #d6dad8;
+    --accent: #1f5c50;
+    --accent-soft: #dceae5;
+    --ok: #227a4f;
+    --fail: #b23a30;
+    --warn: #a16a10;
+    --skip: #8a9089;
+
+    --font-display: "YuMincho", "Yu Mincho", "Hiragino Mincho ProN", "Noto Serif JP", serif;
+    --font-body: "Yu Gothic Medium", "Yu Gothic", "Hiragino Kaku Gothic ProN", "Noto Sans JP", system-ui, sans-serif;
+    --font-mono: "SF Mono", "Menlo", "Migu 1M", "BIZ UDGothic", "Consolas", monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #12151a;
+      --surface: #1a1e24;
+      --surface-2: #1f242b;
+      --text: #e7e9e8;
+      --text-muted: #99a19d;
+      --line: #2c3138;
+      --accent: #6fd3b6;
+      --accent-soft: rgba(111, 211, 182, 0.12);
+      --ok: #4ade94;
+      --fail: #ff6b60;
+      --warn: #f2b94d;
+      --skip: #6b7178;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #12151a;
+    --surface: #1a1e24;
+    --surface-2: #1f242b;
+    --text: #e7e9e8;
+    --text-muted: #99a19d;
+    --line: #2c3138;
+    --accent: #6fd3b6;
+    --accent-soft: rgba(111, 211, 182, 0.12);
+    --ok: #4ade94;
+    --fail: #ff6b60;
+    --warn: #f2b94d;
+    --skip: #6b7178;
+  }
+  :root[data-theme="light"] {
+    --bg: #eef0f0;
+    --surface: #ffffff;
+    --surface-2: #f5f6f5;
+    --text: #1b1e1d;
+    --text-muted: #5b615f;
+    --line: #d6dad8;
+    --accent: #1f5c50;
+    --accent-soft: #dceae5;
+    --ok: #227a4f;
+    --fail: #b23a30;
+    --warn: #a16a10;
+    --skip: #8a9089;
+  }
+
+  * { box-sizing: border-box; }
+  html, body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--font-body);
+    line-height: 1.75;
+    -webkit-font-smoothing: antialiased;
+  }
+  body { max-width: 100%; overflow-x: hidden; }
+
+  .page {
+    max-width: 880px;
+    margin: 0 auto;
+    padding: 4rem 1.5rem 6rem;
+    display: flex;
+    flex-direction: column;
+    gap: 3.5rem;
+  }
+
+  header.hero {
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+    padding-bottom: 2rem;
+    border-bottom: 1px solid var(--line);
+  }
+  .eyebrow {
+    font-family: var(--font-mono);
+    font-size: 0.75rem;
+    letter-spacing: 0.12em;
+    color: var(--accent);
+    text-transform: uppercase;
+  }
+  h1 {
+    font-family: var(--font-display);
+    font-weight: 600;
+    font-size: clamp(1.7rem, 4vw, 2.4rem);
+    text-wrap: balance;
+    margin: 0;
+    letter-spacing: 0.01em;
+  }
+  .hero p {
+    color: var(--text-muted);
+    font-size: 1rem;
+    max-width: 62ch;
+    margin: 0;
+  }
+
+  section { display: flex; flex-direction: column; gap: 1.25rem; }
+  .section-head { display: flex; flex-direction: column; gap: 0.4rem; }
+  h2 {
+    font-family: var(--font-display);
+    font-size: 1.4rem;
+    font-weight: 600;
+    margin: 0;
+  }
+  .section-lede { color: var(--text-muted); font-size: 0.95rem; max-width: 68ch; }
+
+  .note {
+    font-size: 0.82rem;
+    color: var(--text-muted);
+    background: var(--surface-2);
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    padding: 0.7rem 0.9rem;
+  }
+
+  /* --- analysis columns --- */
+  .cols {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 1rem;
+  }
+  @media (max-width: 640px) { .cols { grid-template-columns: 1fr; } }
+  .col {
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    padding: 1.1rem 1.2rem;
+  }
+  .col h3 {
+    margin: 0 0 0.7rem;
+    font-size: 0.78rem;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--text-muted);
+    font-family: var(--font-mono);
+    font-weight: 600;
+  }
+  .col.good h3 { color: var(--ok); }
+  .col.bad h3 { color: var(--fail); }
+  .col ul { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 0.6rem; }
+  .col li { display: flex; gap: 0.55rem; font-size: 0.9rem; }
+  .col li::before { flex: none; font-family: var(--font-mono); }
+  .col.good li::before { content: "○"; color: var(--ok); }
+  .col.bad li::before { content: "△"; color: var(--fail); }
+
+  /* --- brand terminal cards --- */
+  .brand-grid { display: flex; flex-direction: column; gap: 1.4rem; }
+  .term-card {
+    border-radius: 10px;
+    overflow: hidden;
+    border: 1px solid var(--line);
+  }
+  .term-meta {
+    background: var(--surface);
+    padding: 0.85rem 1.1rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.15rem;
+  }
+  .term-name { font-weight: 700; font-size: 0.95rem; display: flex; align-items: center; gap: 0.5rem; }
+  .dot { width: 0.55rem; height: 0.55rem; border-radius: 50%; display: inline-block; }
+  .term-desc { color: var(--text-muted); font-size: 0.83rem; }
+
+  .term-window {
+    font-family: var(--font-mono);
+    font-size: 0.8rem;
+    line-height: 1.65;
+    padding: 1rem 1.1rem 1.2rem;
+    overflow-x: auto;
+    white-space: pre;
+  }
+  .term-window .titlebar {
+    display: flex;
+    gap: 0.4rem;
+    margin-bottom: 0.8rem;
+    opacity: 0.6;
+  }
+  .term-window .tb-dot { width: 0.6rem; height: 0.6rem; border-radius: 50%; background: currentColor; opacity: 0.5; }
+
+  /* brand palettes — intentionally fixed-dark, like terminal screenshots */
+  .term-claude { background: #1e1e1e; color: #d8d8d3; }
+  .term-claude .accent { color: #d97757; }
+  .term-claude .dim { color: #83837a; }
+  .term-claude .ok { color: #6bcb77; font-weight: 700; }
+  .term-claude .bold { color: #f2f2ee; font-weight: 700; }
+
+  .term-gemini { background: #12131a; color: #cfd3ea; }
+  .term-gemini .accent { color: #8ea7ff; }
+  .term-gemini .accent2 { color: #c39bff; }
+  .term-gemini .dim { color: #6d7290; }
+  .term-gemini .ok { color: #5fd9a4; font-weight: 700; }
+  .term-gemini .box { color: #4a4f78; }
+
+  .term-codex { background: #0c0c0c; color: #c7c7c7; }
+  .term-codex .accent { color: #e8a33d; }
+  .term-codex .dim { color: #6e6e6e; }
+  .term-codex .ok { color: #9fd19f; }
+  .term-codex .bold { color: #f4f4f4; font-weight: 700; }
+
+  .term-q { background: #0e1b2b; color: #b9c6d6; }
+  .term-q .accent { color: #ff9900; }
+  .term-q .dim { color: #5c7288; }
+  .term-q .ok { color: #63d29a; font-weight: 700; }
+  .term-q .box { color: #274ancy; }
+  .term-q .bold { color: #eaf1f8; font-weight: 700; }
+
+  /* --- proposal --- */
+  .principles {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 0.9rem;
+  }
+  @media (max-width: 640px) { .principles { grid-template-columns: 1fr; } }
+  .principle {
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-left: 3px solid var(--accent);
+    border-radius: 6px;
+    padding: 0.8rem 1rem;
+    font-size: 0.87rem;
+  }
+  .principle b { display: block; font-size: 0.78rem; color: var(--accent); margin-bottom: 0.2rem; font-family: var(--font-mono); letter-spacing: 0.03em; }
+
+  .dash {
+    background: #101418;
+    color: #dfe4e2;
+    border-radius: 12px;
+    padding: 1.3rem;
+    font-family: var(--font-mono);
+    font-size: 0.83rem;
+  }
+  .dash-summary {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.9rem;
+    padding-bottom: 1rem;
+    margin-bottom: 1rem;
+    border-bottom: 1px solid #262b31;
+  }
+  .pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    padding: 0.3rem 0.75rem;
+    border-radius: 999px;
+    font-weight: 700;
+    font-size: 0.82rem;
+  }
+  .pill.ok { background: rgba(79, 209, 174, 0.15); color: #6fe3c4; }
+  .pill.fail { background: rgba(255, 107, 96, 0.15); color: #ff8a80; }
+  .dash-summary .meta { color: #8a9299; font-size: 0.78rem; font-variant-numeric: tabular-nums; }
+  .host-chips { display: flex; gap: 0.3rem; flex-wrap: wrap; margin-left: auto; }
+  .chip { font-size: 0.72rem; padding: 0.1rem 0.45rem; border-radius: 4px; background: #1c2127; color: #8a9299; }
+
+  details.step {
+    border: 1px solid #262b31;
+    border-radius: 8px;
+    margin-bottom: 0.6rem;
+    overflow: hidden;
+  }
+  details.step[open] { border-color: #33393f; }
+  details.step.fail { border-color: rgba(255, 107, 96, 0.5); border-left: 3px solid #ff6b60; }
+  details.step.ok-row { border-left: 3px solid #2c3138; }
+  summary.step-head {
+    list-style: none;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: 0.7rem;
+    padding: 0.65rem 0.9rem;
+    background: #161a1f;
+  }
+  summary.step-head::-webkit-details-marker { display: none; }
+  summary.step-head::before {
+    content: "▸";
+    color: #6b7178;
+    transition: none;
+    font-size: 0.75rem;
+    flex: none;
+  }
+  details[open] summary.step-head::before { content: "▾"; }
+  .step-icon { flex: none; font-weight: 700; }
+  .step-icon.ok { color: #4ade94; }
+  .step-icon.fail { color: #ff6b60; }
+  .step-num { color: #6b7178; flex: none; }
+  .step-title { flex: 1; color: #e7e9e8; white-space: normal; }
+  .step-mini-matrix { display: flex; gap: 2px; flex: none; }
+  .mm { width: 0.55rem; height: 0.55rem; border-radius: 2px; }
+  .mm.ok { background: #4ade94; }
+  .mm.fail { background: #ff6b60; }
+  .mm.na { background: #2c3138; }
+  .step-dur { color: #6b7178; flex: none; font-variant-numeric: tabular-nums; font-size: 0.78rem; }
+
+  .step-body { padding: 0.9rem 1.1rem 1.1rem; background: #101418; }
+  .step-body .label { color: #6b7178; font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.05em; margin: 0.7rem 0 0.3rem; }
+  .step-body .label:first-child { margin-top: 0; }
+  .step-body .cmd { color: #7fd4d8; overflow-x: auto; white-space: pre; }
+  .step-body .crit { color: #6b7178; }
+  .step-body .crit .bad-line { color: #ff8a80; background: rgba(255,107,96,0.1); }
+  .step-body .out { color: #b9c0c6; overflow-x: auto; white-space: pre; }
+  .diffline { display: block; }
+  .diffline.exp { color: #6fe3c4; }
+  .diffline.got { color: #ff8a80; }
+
+  .matrix-wrap { overflow-x: auto; margin-top: 0.4rem; }
+  table.matrix { border-collapse: collapse; font-size: 0.78rem; width: 100%; min-width: 480px; }
+  table.matrix th, table.matrix td { padding: 0.35rem 0.55rem; text-align: center; border-bottom: 1px solid #21262c; }
+  table.matrix th { color: #8a9299; font-weight: 600; text-align: left; }
+  table.matrix th.host { text-align: center; }
+  table.matrix td.step-label { text-align: left; color: #c7cdd2; white-space: nowrap; }
+  table.matrix td.ok { color: #4ade94; font-weight: 700; }
+  table.matrix td.fail { color: #ff6b60; font-weight: 700; }
+  table.matrix td.na { color: #3a4048; }
+
+  footer.close {
+    border-top: 1px solid var(--line);
+    padding-top: 1.5rem;
+    color: var(--text-muted);
+    font-size: 0.88rem;
+  }
+</style>
+
+<div class="page">
+
+  <header class="hero">
+    <div class="eyebrow">runbook CLI output / 出力デザイン比較</div>
+    <h1>実行結果を、どう見せるか</h1>
+    <p>同じ実行ログでも、CLIツールごとに「読ませ方」の作法が違う。代表的な4ツールの再現イメージと、視認性を起点に組み直した独自案を並べて検討する。</p>
+  </header>
+
+  <section>
+    <div class="section-head">
+      <h2>元の出力の読みどころ</h2>
+      <p class="section-lede">手元の出力にはすでに配慮の跡がある。O/X/!/- の記号と色の二重化、正常性基準や時刻をグレーで後景化する階調づけなど。ただし全体は時系列に流れていく構造のため、知りたい情報（成否）にたどり着くまでの距離が長い。</p>
+    </div>
+    <div class="cols">
+      <div class="col good">
+        <h3>効いている設計</h3>
+        <ul>
+          <li>O/X/!/- の記号＋色の二重化で色覚に依存しない</li>
+          <li>正常性基準・開始/終了時刻をグレーで後景化</li>
+          <li>ホスト別結果を各ステップ直後と全体末尾の二段で提示</li>
+        </ul>
+      </div>
+      <div class="col bad">
+        <h3>埋もれている情報</h3>
+        <ul>
+          <li>最終結論は全出力を読み切った最後の1行に依存する</li>
+          <li>6ステップ分のansible標準出力が同じ視覚的重みで流れる</li>
+          <li>「今回どこが違ったか」を知るには全文比較が必要</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="section-head">
+      <h2>各社CLIならこう出す</h2>
+      <p class="section-lede">主要なAI系CLIツールが採用しがちな視覚言語で、ステップ1（全6ホスト疎通確認）と最終マトリクスを再構成した。</p>
+    </div>
+    <p class="note">以下は各ツールの公開情報・一般的な挙動傾向から再構成したイメージであり、実際の出力を完全に再現したものではない。</p>
+
+    <div class="brand-grid">
+
+      <!-- Claude Code -->
+      <div class="term-card">
+        <div class="term-meta">
+          <div class="term-name"><span class="dot" style="background:#d97757"></span>Claude Code（Anthropic）</div>
+          <div class="term-desc">会話ログの一部としてそのまま流す。太字で構造を作り、確定情報以外はグレーで沈める。</div>
+        </div>
+        <div class="term-window term-claude">
+<span class="bold">--- ステップ 1/6: ad-hoc: 行内指定で全6ホストの疎通確認 ---</span>
+期待結果: 6ホスト全てが CHANGED、ホスト別結果マトリックスに O が6つ並ぶ。
+<span class="accent">$ echo "{{CHECK_LABEL}}: host={{ inventory_hostname }}"</span>
+<span class="dim">正常性基準: rc == 0 and out("機能テスト: host=web01") and ... 6件</span>
+<span class="dim">開始: 16:58:26</span>
+  web01 | CHANGED | rc=0 &gt;&gt; 機能テスト: host=web01
+  ...（他5ホスト、同形式）
+<span class="bold">  db01  db02  mon01  web01  web02  web03</span>
+   <span class="ok">O</span>    <span class="ok">O</span>    <span class="ok">O</span>    <span class="ok">O</span>    <span class="ok">O</span>    <span class="ok">O</span>
+<span class="ok">✔ OK</span> (rc=0, 1.109s)　終了: 16:58:27
+        </div>
+      </div>
+
+      <!-- Gemini CLI -->
+      <div class="term-card">
+        <div class="term-meta">
+          <div class="term-name"><span class="dot" style="background:#8ea7ff"></span>Gemini CLI（Google）</div>
+          <div class="term-desc">ツール呼び出しを枠線ブロックとして分離。◆記号でステータスを添え、実行と結果を明確に切り分ける。</div>
+        </div>
+        <div class="term-window term-gemini">
+<span class="box">╭─</span> <span class="accent">✦ Shell</span>  ad-hoc: 行内指定で全6ホストの疎通確認 <span class="box">─╮</span>
+<span class="box">│</span>  ansible all -i inventory.ini -m shell \
+<span class="box">│</span>    -a 'echo "{{CHECK_LABEL}}: host={{ inventory_hostname }}"'
+<span class="box">╰──────────────────────────────────────────────────────╯</span>
+<span class="accent2">◆</span> 期待: 6ホストすべて CHANGED
+<span class="ok">✓ Completed</span>  db01 db02 mon01 web01 web02 web03 → 6/6 changed
+<span class="dim">  経過 1.1s ・ トークン非使用（ローカル実行）</span>
+
+<span class="box">╭─</span> ホスト別結果マトリクス <span class="box">──────────────────────╮</span>
+<span class="box">│</span>  db01 <span class="ok">●</span>  db02 <span class="ok">●</span>  mon01 <span class="ok">●</span>  web01 <span class="ok">●</span>  web02 <span class="ok">●</span>  web03 <span class="ok">●</span>
+<span class="box">╰────────────────────────────────────────────────────────╯</span>
+        </div>
+      </div>
+
+      <!-- Codex CLI -->
+      <div class="term-card">
+        <div class="term-meta">
+          <div class="term-name"><span class="dot" style="background:#e8a33d"></span>Codex CLI（OpenAI）</div>
+          <div class="term-desc">モノクロ基調。コマンドは「•」、結果は「└」でツリー状に畳み、装飾色はステータス表示の一点に絞る。</div>
+        </div>
+        <div class="term-window term-codex">
+<span class="bold">• Ran</span> ansible all -i samples/local_test/inventory.ini -m shell -a '...'
+  <span class="dim">└ 6 hosts targeted, expecting rc=0 on all</span>
+  <span class="dim">└</span> web01: changed  web02: changed  web03: changed
+  <span class="dim">└</span> db01: changed   db02: changed   mon01: changed
+  <span class="accent">└ result</span> <span class="ok">6/6 changed, 0 failed, 0 unreachable</span> <span class="dim">(1.1s)</span>
+
+<span class="bold">• Summary</span>
+  <span class="dim">└</span> db01 ok  db02 ok  mon01 ok  web01 ok  web02 ok  web03 ok
+        </div>
+      </div>
+
+      <!-- Amazon Q -->
+      <div class="term-card">
+        <div class="term-meta">
+          <div class="term-name"><span class="dot" style="background:#ff9900"></span>Amazon Q Developer CLI（Amazon）</div>
+          <div class="term-desc">ツール利用を🔧ラベル付きパネルで明示。AWSオレンジは状態確認の一点に使う。</div>
+        </div>
+        <div class="term-window term-q">
+<span class="bold">&gt; </span>ステップ 1/6 を実行しています…
+<span class="accent">🔧 execute_bash</span>
+  ansible all -i inventory.ini -m shell -a 'echo "...: host={{ inventory_hostname }}"'
+<span class="dim">  期待: 6ホスト CHANGED / rc=0</span>
+<span class="ok">🟢 完了</span>  6 hosts changed, 0 failed, 0 unreachable  <span class="dim">(1.1s)</span>
+
+  db01<span class="ok">✓</span> db02<span class="ok">✓</span> mon01<span class="ok">✓</span> web01<span class="ok">✓</span> web02<span class="ok">✓</span> web03<span class="ok">✓</span>
+        </div>
+      </div>
+
+    </div>
+  </section>
+
+  <section>
+    <div class="section-head">
+      <h2>独自提案</h2>
+      <p class="section-lede">元の記号運用（O/X/!/-の二重化）は良い資産として引き継ぎつつ、「結論を先に、詳細は求めたときだけ」という順序に組み替える。</p>
+    </div>
+
+    <div class="principles">
+      <div class="principle"><b>01 サマリー先出し</b>全体の成否・所要時間・ログの場所を、本文を読む前に確定させる。</div>
+      <div class="principle"><b>02 既定で折りたたむ</b>ansible/playbookの生ログは詳細情報。開かなくても成否とホスト状況が分かる。</div>
+      <div class="principle"><b>03 色と形の両方で状態を示す</b>既存のO/X/!/-の思想を継承し、色覚に依存しない。</div>
+      <div class="principle"><b>04 異常時だけ浮き上がる</b>全成功時は静かに、失敗したステップだけ枠線と展開で目立たせる。</div>
+    </div>
+
+    <div class="dash">
+      <div class="dash-summary">
+        <span class="pill ok">✔ 全6ステップ成功</span>
+        <span class="meta">実行 5/6 → 表示は抜粋 ・ 合計 4.5s ・ 16:58:26–16:58:30</span>
+        <span class="host-chips">
+          <span class="chip">db01</span><span class="chip">db02</span><span class="chip">mon01</span>
+          <span class="chip">web01</span><span class="chip">web02</span><span class="chip">web03</span>
+        </span>
+      </div>
+
+      <details class="step ok-row">
+        <summary class="step-head">
+          <span class="step-icon ok">✔</span>
+          <span class="step-num">1/6</span>
+          <span class="step-title">ad-hoc: 行内指定で全6ホストの疎通確認</span>
+          <span class="step-mini-matrix">
+            <span class="mm ok"></span><span class="mm ok"></span><span class="mm ok"></span>
+            <span class="mm ok"></span><span class="mm ok"></span><span class="mm ok"></span>
+          </span>
+          <span class="step-dur">1.109s</span>
+        </summary>
+        <div class="step-body">
+          <div class="label">コマンド</div>
+          <div class="cmd">ansible -e '{"CHECK_LABEL":"機能テスト","HOGE":"FUGA"}' all -i inventory.ini -m shell -a 'echo "{{CHECK_LABEL}}: host={{ inventory_hostname }}"'</div>
+          <div class="label">正常性基準</div>
+          <div class="crit">rc == 0 and out("...host=web01") and ... (6条件) and not out("UNREACHABLE|FAILED")</div>
+          <div class="label">出力（抜粋）</div>
+          <div class="out">db01 | CHANGED | rc=0 &gt;&gt; 機能テスト: host=db01
+web01 | CHANGED | rc=0 &gt;&gt; 機能テスト: host=web01
+（他4ホスト省略 — 全件は元ログ参照）</div>
+        </div>
+      </details>
+
+      <details class="step fail" open>
+        <summary class="step-head">
+          <span class="step-icon fail">✘</span>
+          <span class="step-num">?/6</span>
+          <span class="step-title">例: 失敗時の表示（架空データ）— playbook: HOGE値の上書き確認</span>
+          <span class="step-mini-matrix">
+            <span class="mm ok"></span><span class="mm fail"></span><span class="mm na"></span>
+          </span>
+          <span class="step-dur">0.61s</span>
+        </summary>
+        <div class="step-body">
+          <div class="label">正常性基準（不一致箇所を強調）</div>
+          <div class="crit">rc == 0 and out("HOGE=PIYO") and <span class="bad-line">not out("HOGE=FUGA")</span></div>
+          <div class="label">期待 / 実際の差分</div>
+          <div class="out"><span class="diffline exp">期待: HOGE=PIYO (host=web02)</span><span class="diffline got">実際: HOGE=FUGA (host=web02)  ← 一致せず</span></div>
+          <div class="label">影響ホスト</div>
+          <div class="out">web01 ✔  web02 ✘ (基準不一致)  web03 対象外</div>
+        </div>
+      </details>
+
+      <div class="label" style="color:#6b7178; font-size:0.72rem; text-transform:uppercase; letter-spacing:0.05em; margin:1rem 0 0.4rem;">最終ホスト別結果マトリクス</div>
+      <div class="matrix-wrap">
+        <table class="matrix">
+          <thead>
+            <tr><th>ステップ</th><th class="host">db01</th><th class="host">db02</th><th class="host">mon01</th><th class="host">web01</th><th class="host">web02</th><th class="host">web03</th></tr>
+          </thead>
+          <tbody>
+            <tr><td class="step-label">1: 全6ホスト疎通確認</td><td class="ok">O</td><td class="ok">O</td><td class="ok">O</td><td class="ok">O</td><td class="ok">O</td><td class="ok">O</td></tr>
+            <tr><td class="step-label">2: RB-LOCALDEFスタイル</td><td class="na">–</td><td class="na">–</td><td class="na">–</td><td class="ok">O</td><td class="ok">O</td><td class="ok">O</td></tr>
+            <tr><td class="step-label">3: 行内 -i / -e 上書き</td><td class="na">–</td><td class="na">–</td><td class="na">–</td><td class="ok">O</td><td class="ok">O</td><td class="ok">O</td></tr>
+            <tr><td class="step-label">4: 行ごとのインベントリ切替</td><td class="ok">O</td><td class="ok">O</td><td class="na">–</td><td class="ok">O</td><td class="ok">O</td><td class="ok">O</td></tr>
+            <tr><td class="step-label">5: 行内指定 + -e 優先確認</td><td class="ok">O</td><td class="ok">O</td><td class="na">–</td><td class="na">–</td><td class="na">–</td><td class="na">–</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="note" style="margin-top:0.6rem; background:transparent; border:none; padding:0; color:#6b7178;">O=成功　X=失敗　!=到達不能　–=対象外／失敗セルがある行のみ枠線が赤くなり、行頭にジャンプできる想定。</div>
+    </div>
+  </section>
+
+  <footer class="close">
+    元の出力が持っていた「記号＋色の二重化」という良い資産は変えず、時系列ログを既定で畳んで結論を先出しする構成に組み替えた。全ステップ成功時は静かなまま、失敗が出たステップだけが自然と目に入る。
+  </footer>
+
+</div>

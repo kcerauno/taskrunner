@@ -1,0 +1,14 @@
+---
+# runbook の playbook ラッパー検証用プレイブック
+- name: 稼働確認プレイ
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: uptime を取得
+      ansible.builtin.shell: uptime
+      register: uptime_result
+      changed_when: false
+
+    - name: 結果を表示 (runbook の変数 CHECK_LABEL を -e 経由で参照)
+      ansible.builtin.debug:
+        msg: "{{ CHECK_LABEL | default('点検') }}: {{ inventory_hostname }} => {{ uptime_result.stdout }}"

@@ -1,0 +1,96 @@
+{
+  "procedure": {
+    "file": "samples/local_test/ansible_local_test.md",
+    "title": "ansible ローカル6ホスト検証手順",
+    "mode": "batch",
+    "selected_steps": [
+      1,
+      2,
+      3,
+      4
+    ],
+    "vars": {
+      "INVENTORY": "samples/local_test/inventory.ini",
+      "CHECK_LABEL": "定期点検"
+    },
+    "share_env": false
+  },
+  "status": "completed",
+  "started_at": "2026-07-04T11:17:22",
+  "finished_at": "2026-07-04T11:17:25",
+  "steps": [
+    {
+      "number": 1,
+      "title": "全6ホストの疎通確認",
+      "command": "ansible all -i samples/local_test/inventory.ini -e '{\"INVENTORY\": \"samples/local_test/inventory.ini\", \"CHECK_LABEL\": \"定期点検\"}' -m shell -a 'echo \"host=$(hostname) user=$(id -un)\"'",
+      "criteria": "rc == 0 and\nout(\"web01 \\| CHANGED\") and out(\"web02 \\| CHANGED\") and out(\"web03 \\| CHANGED\") and\nout(\"db01 \\| CHANGED\") and out(\"db02 \\| CHANGED\") and out(\"mon01 \\| CHANGED\") and\nnot out(\"UNREACHABLE|FAILED\")",
+      "status": "ok",
+      "rc": 0,
+      "duration": 1.088,
+      "started_at": "2026-07-04T11:17:22",
+      "finished_at": "2026-07-04T11:17:23",
+      "detail": "",
+      "host_results": {
+        "db02": "ok",
+        "web01": "ok",
+        "web03": "ok",
+        "db01": "ok",
+        "web02": "ok",
+        "mon01": "ok"
+      },
+      "host_matrix": true
+    },
+    {
+      "number": 2,
+      "title": "webservers グループのみ負荷確認",
+      "command": "ansible webservers -i samples/local_test/inventory.ini -e '{\"INVENTORY\": \"samples/local_test/inventory.ini\", \"CHECK_LABEL\": \"定期点検\"}' -f 6 -m shell -a uptime",
+      "criteria": "rc == 0 and\nout(\"web01\") and out(\"web02\") and out(\"web03\") and\nnot out(\"db01|db02|mon01\") and\nnot out(\"UNREACHABLE|FAILED\")",
+      "status": "ok",
+      "rc": 0,
+      "duration": 0.865,
+      "started_at": "2026-07-04T11:17:23",
+      "finished_at": "2026-07-04T11:17:24",
+      "detail": "",
+      "host_results": {
+        "web03": "ok",
+        "web01": "ok",
+        "web02": "ok"
+      },
+      "host_matrix": true
+    },
+    {
+      "number": 3,
+      "title": "db01 単一ホストのディスク確認",
+      "command": "ansible db01 -i samples/local_test/inventory.ini -e '{\"INVENTORY\": \"samples/local_test/inventory.ini\", \"CHECK_LABEL\": \"定期点検\"}' -m shell -a 'df -h /'",
+      "criteria": "rc == 0 and out(\"db01 \\| CHANGED\") and not out(\" 100%|UNREACHABLE|FAILED\")",
+      "status": "ok",
+      "rc": 0,
+      "duration": 0.799,
+      "started_at": "2026-07-04T11:17:24",
+      "finished_at": "2026-07-04T11:17:25",
+      "detail": "",
+      "host_results": {
+        "db01": "ok"
+      },
+      "host_matrix": true
+    },
+    {
+      "number": 4,
+      "title": "手順書変数と jinja2 の混在確認",
+      "command": "ansible webservers -i samples/local_test/inventory.ini -e '{\"INVENTORY\": \"samples/local_test/inventory.ini\", \"CHECK_LABEL\": \"定期点検\"}' -m shell -a 'echo \"{{CHECK_LABEL}}: {{ inventory_hostname }} は正常です\"'",
+      "criteria": "rc == 0 and\nout(\"定期点検: web01 は正常です\") and\nout(\"定期点検: web02 は正常です\") and\nout(\"定期点検: web03 は正常です\") and\nnot out(\"UNREACHABLE|FAILED\")",
+      "status": "ok",
+      "rc": 0,
+      "duration": 0.831,
+      "started_at": "2026-07-04T11:17:25",
+      "finished_at": "2026-07-04T11:17:25",
+      "detail": "",
+      "host_results": {
+        "web01": "ok",
+        "web02": "ok",
+        "web03": "ok"
+      },
+      "host_matrix": true
+    }
+  ]
+}

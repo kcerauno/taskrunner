@@ -1,0 +1,12 @@
+db01 | CHANGED | rc=0 >>
+機能テスト: host=db01
+db02 | CHANGED | rc=0 >>
+機能テスト: host=db02
+web03 | CHANGED | rc=0 >>
+機能テスト: host=web03
+web02 | CHANGED | rc=0 >>
+機能テスト: host=web02
+web01 | CHANGED | rc=0 >>
+機能テスト: host=web01
+mon01 | CHANGED | rc=0 >>
+機能テスト: host=mon01

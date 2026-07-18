@@ -1,0 +1,3 @@
+db01 | CHANGED | rc=0 >>
+Filesystem      Size  Used Avail Use% Mounted on
+/dev/nvme1n1p4  295G  141G  140G  51% /

@@ -1,0 +1,12 @@
+db02 | CHANGED | rc=0 >>
+host=practicus user=practi
+web01 | CHANGED | rc=0 >>
+host=practicus user=practi
+web02 | CHANGED | rc=0 >>
+host=practicus user=practi
+db01 | CHANGED | rc=0 >>
+host=practicus user=practi
+web03 | CHANGED | rc=0 >>
+host=practicus user=practi
+mon01 | CHANGED | rc=0 >>
+host=practicus user=practi

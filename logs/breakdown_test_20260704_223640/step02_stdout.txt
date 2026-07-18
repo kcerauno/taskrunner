@@ -1,0 +1,2 @@
+service is active
+ERROR: minor issue detected

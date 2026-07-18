@@ -1,0 +1,2 @@
+auth db01 password=*****
+TOKEN=tok-1783173282 を取得した
