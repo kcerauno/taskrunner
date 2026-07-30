@@ -7,6 +7,8 @@ check --preview の 2 部構成表示でもそのまま再利用する。
 
 from __future__ import annotations
 
+import re
+
 from rich import box
 from rich.console import Console
 from rich.markup import escape
@@ -92,9 +94,11 @@ def print_host_matrix(rows: list[tuple[str, dict]], label_header: str = "", inde
         box=box.SIMPLE,
         border_style="#4a4f78",
         header_style="bold #cfd3ea",
-        pad_edge=True,
+        # show_edge=False: 表の上下に入る空行を落とす(1表あたり2行の削減)
+        pad_edge=False,
+        show_edge=False,
     )
-    table.add_column(label_header, style="bold")
+    table.add_column(label_header, style="bold", overflow="fold")
     for host in hosts:
         table.add_column(Text(host), justify="center")
     for label, results in rows:
@@ -110,8 +114,83 @@ def print_host_matrix(rows: list[tuple[str, dict]], label_header: str = "", inde
         console.print(f"{indent}{line}", markup=False)
 
 
+# 案R5: コマンド出力のうち「構造を示す行」を判別して強調するためのパターン。
+# ansible の出力は長くなりやすく、どこでホストが切り替わったかが埋もれるため。
+_OUT_HOST_OK_RE = re.compile(r"^\S+ \| (CHANGED|SUCCESS|OK) \|")
+_OUT_HOST_NG_RE = re.compile(r"^\S+ \| (FAILED|UNREACHABLE)")
+_OUT_PLAY_HEAD_RE = re.compile(r"^(PLAY|TASK|PLAY RECAP)\b")
+_OUT_RECAP_NG_RE = re.compile(r"\b(failed|unreachable)=[1-9]")
+
+
+def output_line_style(text: str) -> str | None:
+    """コマンド出力1行の表示スタイルを返す(案R5)。None は既定のまま。
+
+    文字は一切変えず、構造(ホストの切り替わり・プレイの区切り・失敗行)だけを
+    色で浮かび上がらせる。判定に使う値そのものではないので、
+    パターンが外れても表示が地味になるだけで害はない。
+    """
+    if _OUT_HOST_NG_RE.match(text) or _OUT_RECAP_NG_RE.search(text):
+        return "bold #ff6b60"
+    if _OUT_HOST_OK_RE.match(text):
+        return "bold #5fd9a4"
+    if _OUT_PLAY_HEAD_RE.match(text):
+        return "bold #8ea7ff"
+    return None
+
+
 def host_results_logline(results: dict) -> str:
     return " ".join(f"{h}={_LOG_MARKS.get(s, '-')}" for h, s in sorted(results.items()))
+
+
+# 最終リザルト一覧の状態表示: StepRecord.status → (表示ラベル, スタイル)
+_RESULT_LABELS = {
+    "ok": ("✓ 完了", "bold #5fd9a4"),
+    "ng": ("✘ 失敗", "bold #ff6b60"),
+    "error": ("✘ エラー", "bold #ff6b60"),
+    "skipped": ("→ スキップ", "bold #f2b94d"),
+}
+# 記録が残っていない場合の状態(選択されていたが中断で到達しなかった / 実行対象外)
+_RESULT_NOT_RUN = ("- 未実行", "dim")
+_RESULT_EXCLUDED = ("- 対象外", "dim")
+
+
+def result_table(steps, records, selected: set[int], aborted_at: int | None = None) -> Table:
+    """実行後のステップ別リザルト一覧(案R1)。
+
+    「どのステップで落ちたか」「どのステップが実行されなかったか」を
+    最終サマリーだけで読めるようにする。records に無いステップは、
+    選択されていれば「未実行」(中断で到達しなかった)、
+    選択されていなければ「対象外」として明示する(読み手に引き算をさせない)。
+    """
+    by_number = {r.number: r for r in records}
+    # show_edge=False: box.SIMPLE が表の上下に入れる空行を落として詰める
+    table = Table(box=box.SIMPLE, border_style="#4a4f78", header_style="bold #cfd3ea",
+                  pad_edge=False, show_edge=False)
+    table.add_column("No.", justify="right")
+    table.add_column("ステップ", overflow="fold")
+    table.add_column("結果")
+    table.add_column("rc", justify="right")
+    table.add_column("所要", justify="right")
+    table.add_column("")  # 中断位置の注記
+    for s in steps:
+        rec = by_number.get(s.number)
+        if rec is None:
+            label, style = _RESULT_NOT_RUN if s.number in selected else _RESULT_EXCLUDED
+            rc_text = duration_text = "-"
+        else:
+            label, style = _RESULT_LABELS.get(rec.status, (rec.status, ""))
+            rc_text = "-" if rec.rc is None else str(rec.rc)
+            duration_text = "-" if rec.duration is None else f"{rec.duration}s"
+        note = "← 中断" if aborted_at is not None and s.number == aborted_at else ""
+        table.add_row(
+            str(s.number),
+            Text(s.title),
+            Text(label, style=style),
+            rc_text,
+            duration_text,
+            Text(note, style="bold #ff6b60"),
+        )
+    return table
 
 
 def step_table(title: str, steps, mask=lambda t: t) -> Table:

@@ -29,6 +29,7 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
+from rich.cells import cell_len
 from rich.markup import escape
 
 from . import __version__, criteria, parser
@@ -40,8 +41,10 @@ from .render import (
     _MATRIX_LEGEND,
     console,
     host_results_logline,
+    output_line_style,
     print_host_matrix,
     print_tree_item,
+    result_table,
     show_step_header,
     step_table,
 )
@@ -370,11 +373,14 @@ def cmd_run(args: argparse.Namespace) -> int:
 
     status = "completed"
     exit_code = 0
+    aborted_at: int | None = None  # 中断が起きたステップ番号(案R1 の一覧で「← 中断」を出す)
+    legend_shown = False  # 案R3: ホスト別結果の凡例は最初の1回だけ出す
     try:
         for step in steps:
             rec = StepRecord(step.number, step.title, step.command, step.criteria)
             if step.number not in selected:
                 continue
+            aborted_at = step.number  # 中断された場合はこのステップ位置(正常終了時は最後にクリアする)
             show_step_header(step, total, mask)
             art.log(f"--- ステップ {step.number}: {step.title} ---")
 
@@ -437,8 +443,11 @@ def cmd_run(args: argparse.Namespace) -> int:
             files = art.open_step_files(step.number)
             try:
                 def echo(line: str, is_stderr: bool) -> None:
-                    console.print(f"  │   {mask(line.rstrip(chr(10)))}",
-                                  style="red" if is_stderr else None, markup=False)
+                    text = mask(line.rstrip(chr(10)))
+                    # 案R5: stderr は赤。stdout は構造行(ホスト区切り・プレイ見出し・
+                    # 失敗行)だけ色を付け、本文は既定のまま流す。
+                    style = "red" if is_stderr else output_line_style(text)
+                    console.print(f"  │   {text}", style=style, markup=False)
                     files.write(mask(line), is_stderr)
 
                 result = run_command(step.command, timeout=step.timeout, cwd=step.cwd,
@@ -458,7 +467,11 @@ def cmd_run(args: argparse.Namespace) -> int:
             rec.stdout = result.stdout
             rec.stderr = result.stderr
             art.log(f"終了コード: {result.rc}  所要時間: {rec.duration}s")
-            finished_disp = f"{finished:%Y-%m-%d %H:%M:%S}"
+            # 案R4: 終了時刻は結果行にまとめる(独立行をやめて1行削減)。
+            # 日付は「実行開始」ヘッダに出ているので時刻のみ。日を跨いだ場合だけ日付を併記する。
+            finished_disp = (f"{finished:%H:%M:%S}" if finished.date() == started.date()
+                             else f"{finished:%Y-%m-%d %H:%M:%S}")
+            result_note = f"rc={result.rc}, {rec.duration}s, 終了 {finished_disp}"
 
             # D4: 中断シグナルにより子プロセスが終了した場合(操作者の意図的中断のため
             # RB-ONFAIL は表示せず、判定・内訳もスキップする)
@@ -466,9 +479,8 @@ def cmd_run(args: argparse.Namespace) -> int:
                 rec.status = "error"
                 rec.detail = f"シグナル ({signal.Signals(result.interrupted).name}) により中断"
                 art.log(f"判定: エラー ({rec.detail})")
-                console.print(f"  ├ 終了: {finished_disp}")
                 print_tree_item("詳細", rec.detail, style="bold #ff6b60")
-                console.print(f"  └ 結果: [bold #ff6b60]✘ Failed[/] (rc={result.rc}, {rec.duration}s)")
+                console.print(f"  └ 結果: [bold #ff6b60]✘ Failed[/] ({result_note})")
                 console.print("[bold red]中断シグナルを受信したため、実行を中断します。[/]")
                 art.add_record(rec)
                 status = "aborted"
@@ -492,37 +504,55 @@ def cmd_run(args: argparse.Namespace) -> int:
                 rec.host_results = parse_ansible_host_results(result.stdout + "\n" + result.stderr)
                 rec.host_matrix = step.host_matrix
                 if step.host_matrix and rec.host_results:
-                    console.print("  ├ ホスト別結果:")
-                    print_host_matrix([("", rec.host_results)], indent="  │   ")
-                    console.print(f"  │   {_MATRIX_LEGEND}")
-                    art.log("ホスト別結果: " + host_results_logline(rec.host_results))
+                    # 案R2: 1ステップ分は1次元なので表を組まず1行で出す
+                    # (run.log と同じ表記になり、5行 → 1行に収まる)
+                    line = host_results_logline(rec.host_results)
+                    if len("  ├ ホスト別結果: ") + len(line) <= console.width:
+                        console.print(f"  ├ ホスト別結果: {escape(line)}")
+                    else:  # ホスト数が多く1行に収まらない場合のみ表にフォールバック
+                        console.print("  ├ ホスト別結果:")
+                        print_host_matrix([("", rec.host_results)], indent="  │   ")
+                    # 案R3: 凡例は最初のステップだけ(最終マトリックスでも再掲される)
+                    if not legend_shown:
+                        console.print(f"  │   {_MATRIX_LEGEND}")
+                        legend_shown = True
+                    art.log("ホスト別結果: " + line)
 
             art.add_record(rec)
             if rec.status == "ok":
                 art.log("判定: OK")
-                console.print(f"  ├ 終了: {finished_disp}")
-                console.print(f"  └ 結果: [bold #5fd9a4]✓ Completed[/] (rc={result.rc}, {rec.duration}s)")
+                console.print(f"  └ 結果: [bold #5fd9a4]✓ Completed[/] ({result_note})")
             else:
                 art.log(f"判定: NG ({rec.detail})")
-                console.print(f"  ├ 終了: {finished_disp}")
                 print_tree_item("詳細", rec.detail, style="bold #ff6b60")
                 # 提案1: 判定の詳細診断(どの条件で落ちたかの内訳)
                 if rec.status == "ng":
                     breakdown = criteria.diagnose(step.criteria, result.rc, result.stdout, result.stderr)
                     if len(breakdown) >= 2:  # 条件が1つだけなら基準式そのものと同じ情報なので出さない
-                        rec.criteria_breakdown = [{"expr": t, "ok": ok} for t, ok in breakdown]
+                        # 案R6: 各条件に「実際の出力はどうだったか」を添える
+                        evid = {t: mask(criteria.term_evidence(
+                            t, result.rc, result.stdout, result.stderr)) for t, _ in breakdown}
+                        rec.criteria_breakdown = [
+                            {"expr": t, "ok": ok, "evidence": evid[t]} for t, ok in breakdown]
+                        # 全角文字を含む条件式でも → の位置を揃えるため表示幅で計算する
+                        width = max(cell_len(mask(t)) for t, _ in breakdown)
                         console.print("  ├ 判定内訳:")
                         art.log("判定内訳:")
                         for text, ok in breakdown:
                             mark = "[bold #5fd9a4]OK[/]" if ok else "[bold #ff6b60]NG[/]"
-                            console.print(f"  │   \\[{mark}] {escape(mask(text))}")
-                            art.log(f"  [{'OK' if ok else 'NG'}] {text}")
-                console.print(f"  └ 結果: [bold #ff6b60]✘ Failed[/] (rc={result.rc}, {rec.duration}s)")
+                            pad = " " * (width - cell_len(mask(text)))
+                            note = f"{pad}  [dim]→ {escape(evid[text])}[/]" if evid[text] else ""
+                            console.print(f"  │   \\[{mark}] {escape(mask(text))}{note}")
+                            art.log(f"  [{'OK' if ok else 'NG'}] {text}"
+                                    + (f"  → {evid[text]}" if evid[text] else ""))
+                console.print(f"  └ 結果: [bold #ff6b60]✘ Failed[/] ({result_note})")
                 console.print("[bold red]失敗したため、実行を中断します。[/]")
                 show_onfail_guidance(step, art)  # 提案B: 失敗時ガイダンス
                 status = "aborted"
                 exit_code = 1
                 break
+        else:
+            aborted_at = None  # break せず全ステップ走破した(中断位置なし)
     except KeyboardInterrupt:
         art.log("中断されました(SIGINT)")
         console.print("\n[red]中断されました[/red]")
@@ -559,8 +589,14 @@ def cmd_run(args: argparse.Namespace) -> int:
     else:
         lbl = "実行中断"
         style = "bold #ff6b60"
-    console.print(f"・ 実行結果: [{style}]{lbl}[/]")
-    console.print(f"  └ ログ保存先: {log_dir}")
+    # 案R1: 中断時は「どのステップで落ちたか」を1行目で示す(遡って探させない)
+    failed = next((r for r in art.records if r.status in ("ng", "error")), None)
+    if failed is not None:
+        lbl += f" — ステップ {failed.number}「{failed.title}」で{'失敗' if failed.status == 'ng' else 'エラー'}"
+    console.print(f"・ 実行結果: [{style}]{escape(lbl)}[/]")
+    # 案R1: ステップ別リザルト一覧(未実行・対象外も明示する)
+    console.print(result_table(steps, art.records, selected, aborted_at))
+    console.print(f"  └ ログ保存先: {log_dir}", markup=False)
     return exit_code
 
 
@@ -636,6 +672,14 @@ def cmd_check(args: argparse.Namespace) -> int:
                 f"ステップ{s.number}「{s.title}」: "
                 f"見出しの番号 {s.heading_number} が実際の順序 {s.number} と不一致です"
                 f"(runbook renumber で振り直せます)")
+    # 案R9: 見出しはあるが本文が空の自由記述セクション。特に RB-ONFAIL は
+    # 失敗して中断した瞬間にしか表示されないため、空だと気付く機会が事実上ない。
+    for s in proc.steps:
+        for name in s.empty_sections:
+            warnings_.append(
+                f"ステップ{s.number}「{s.title}」: {name} の内容が空です"
+                f"(コードフェンス ``` の中に書かれている可能性があります。"
+                f"{name} はフェンスなしで記述してください)")
     warnings_ += _check_paths(proc.steps)
     for w in warnings_:
         console.print(f"[bold yellow]警告[/bold yellow] {escape(w)}")

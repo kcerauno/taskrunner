@@ -88,6 +88,69 @@ def diagnose(expr: str, rc: int, stdout: str, stderr: str) -> list[tuple[str, bo
     return results
 
 
+def _regex_evidence(pattern: str, label: str, text: str, max_len: int) -> str:
+    """正規表現1つについて、対象出力の実際のマッチ状況を短い日本語で返す。"""
+    try:
+        cre = re.compile(pattern)
+    except re.error:
+        return ""
+    lines = text.splitlines()
+    hits = [(i, line) for i, line in enumerate(lines, 1) if cre.search(line)]
+    if not hits:
+        # 行をまたぐパターン(\n や \s を含む場合)は行単位検索では拾えないため全文で確認する
+        if cre.search(text) is not None:
+            return f"{label} にマッチあり(複数行にまたがる)"
+        return f"{label} にマッチなし"
+    lineno, content = hits[0]
+    content = content.strip()
+    if len(content) > max_len:
+        content = content[:max_len - 1] + "…"
+    count = f"{len(hits)}行がマッチ" if len(hits) > 1 else "1行がマッチ"
+    return f"{label} の{count} (初出 L{lineno}: {content})"
+
+
+def term_evidence(expr: str, rc: int, stdout: str, stderr: str, max_len: int = 60) -> str:
+    """条件式1つについて「実際の出力はどうだったか」を返す(案R6)。
+
+    判定内訳が「どの条件で落ちたか」までしか示さないため、
+    out()/err()/match() が何行にマッチしたか・初出はどこかを添えて、
+    出力を目でスクロールして探す作業をなくす。
+    診断は補助情報なので、解析できない場合は空文字を返す(例外にしない)。
+
+    戻り値には出力本文が含まれるため、表示・記録側でマスクを適用すること。
+    """
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", SyntaxWarning)
+            tree = ast.parse(f"({expr})", mode="eval")
+    except SyntaxError:
+        return ""
+
+    targets = {
+        "out": ("stdout", stdout),
+        "err": ("stderr", stderr),
+        "match": ("stdout+stderr", stdout + "\n" + stderr),
+    }
+    parts: list[str] = []
+    seen: set = set()
+    for node in ast.walk(tree):
+        if (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+                and node.func.id in targets and len(node.args) == 1):
+            arg = node.args[0]
+            if not (isinstance(arg, ast.Constant) and isinstance(arg.value, str)):
+                continue
+            key = (node.func.id, arg.value)
+            if key in seen:
+                continue
+            seen.add(key)
+            label, text = targets[node.func.id]
+            parts.append(_regex_evidence(arg.value, label, text, max_len))
+        elif isinstance(node, ast.Name) and node.id in ("rc", "exit_code") and "rc" not in seen:
+            seen.add("rc")
+            parts.append(f"実際 rc={rc}")
+    return " / ".join(p for p in parts if p)
+
+
 def evaluate(expr: str, rc: int, stdout: str, stderr: str, _validate_only: bool = False) -> bool:
     try:
         # 括弧で包むことで複数行の式も許容する。

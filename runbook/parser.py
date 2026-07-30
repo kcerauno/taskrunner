@@ -113,6 +113,9 @@ class Step:
     host_matrix: bool = False  # ansible: host_matrix: true でホスト別結果マトリックスを表示
     onfail: str = ""  # RB-ONFAIL: 失敗で中断した瞬間に表示する作業者向けガイダンス
     inventories: list[str] = field(default_factory=list)  # ansible系: 使用インベントリ(実行前サマリー表示用)
+    # 見出しはあるが本文が空になった自由記述セクション名(check で警告する。
+    # 内容をコードフェンスで囲むと _plain_text が捨てるため、黙って消えるのを防ぐ)
+    empty_sections: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -214,6 +217,15 @@ def _parse_step(number: int, title: str, body_lines: list[str], line_no: int) ->
 
     if "onfail" in sections:
         step.onfail = _plain_text(sections["onfail"])
+
+    # 自由記述セクションの見出しがあるのに本文が空になったものを記録する。
+    # 典型例は内容をコードフェンスで囲んだ場合(_plain_text はフェンス外のみ拾う)。
+    # RB-DESCRIPTION の空は手動ステップ判定でエラーになるためここでは onfail と同様に
+    # 記録だけ行い、判定は check 側に委ねる。
+    for name, key, text in (("RB-DESCRIPTION", "description", step.description),
+                            ("RB-ONFAIL", "onfail", step.onfail)):
+        if key in sections and not text:
+            step.empty_sections.append(name)
 
     # RB-CMD がないステップは「手動ステップ」(目視確認・手作業・関係者連絡など)。
     # 実行時は RB-DESCRIPTION を表示して作業者の完了確認を待つ。

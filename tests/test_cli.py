@@ -631,3 +631,191 @@ def test_sigterm_during_step_aborts_with_143_and_finalizes(tmp_path):
     assert result["status"] == "aborted"
     assert result["steps"][0]["status"] == "error"
     assert "SIGTERM" in result["steps"][0]["detail"]
+
+
+def test_check_warns_fenced_onfail_is_empty(tmp_path, capsys):
+    """案R9: RB-ONFAIL をコードフェンスで囲むと内容が捨てられるため警告する。
+    失敗して中断した瞬間にしか表示されないので、check で気付けないと事実上気付けない。"""
+    md = write_md(tmp_path, """\
+        ## S1
+
+        ### RB-CMD
+        ```bash
+        true
+        ```
+
+        ### RB-ONFAIL
+        ```
+        フェンス内なので捨てられる
+        ```
+    """)
+    rc = cli.main(["check", str(md)])
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "RB-ONFAIL の内容が空です" in out
+    assert "警告 1 件" in out
+
+
+def test_check_no_warning_for_unfenced_onfail(tmp_path, capsys):
+    md = write_md(tmp_path, """\
+        ## S1
+
+        ### RB-CMD
+        ```bash
+        true
+        ```
+
+        ### RB-ONFAIL
+        担当へ連絡する。
+    """)
+    rc = cli.main(["check", str(md)])
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "内容が空です" not in out
+
+
+def test_result_summary_names_failed_step(tmp_path, capsys):
+    """案R1: 最終サマリーが「どのステップで落ちたか」を示し、未実行を明示する"""
+    md = write_md(tmp_path, """\
+        ## 成功する
+
+        ### RB-CMD
+        ```bash
+        true
+        ```
+
+        ## 失敗する
+
+        ### RB-CMD
+        ```bash
+        echo out; false
+        ```
+
+        ## 到達しない
+
+        ### RB-CMD
+        ```bash
+        true
+        ```
+    """)
+    rc = cli.main(["run", str(md), "--yes", "--operator", "山田",
+                   "--log-dir", str(tmp_path / "logs")])
+    out = capsys.readouterr().out
+    assert rc == 1
+    assert "ステップ 2「失敗する」で失敗" in out
+    assert "未実行" in out       # 3番目は中断で到達しない
+    assert "← 中断" in out
+
+
+def test_criteria_breakdown_records_evidence(tmp_path):
+    """案R6: 判定内訳に「実際の出力はどうだったか」が result.json / run.log に残る"""
+    md = write_md(tmp_path, """\
+        ## 失敗
+
+        ### RB-CMD
+        ```bash
+        echo OK
+        echo ERROR
+        ```
+
+        ### RB-EXPECTED
+        ```
+        rc == 0 and out("OK") and not out("ERROR")
+        ```
+    """)
+    rc = cli.main(["run", str(md), "--yes", "--operator", "山田",
+                   "--log-dir", str(tmp_path / "logs")])
+    assert rc == 1
+    log_dir, result = read_result(tmp_path / "logs")
+    evid = {b["expr"]: b["evidence"] for b in result["steps"][0]["criteria_breakdown"]}
+    assert "実際 rc=0" in evid["rc == 0"]
+    assert "初出 L2" in evid['not out("ERROR")']
+    assert "→" in (log_dir / "run.log").read_text(encoding="utf-8")
+
+
+def test_secret_masked_in_breakdown_evidence(tmp_path, capsys):
+    """案R6: 内訳の「実際の出力」にはコマンド出力の本文が入るため、
+    そこに現れたシークレット値もマスクされること"""
+    md = write_md(tmp_path, """\
+        ```runbook
+        vars:
+          API_TOKEN: s3cret-value-xyz
+        secrets: [API_TOKEN]
+        ```
+
+        ## 出力にトークンが混ざる
+
+        ### RB-CMD
+        ```bash
+        echo "token is {{API_TOKEN}}"
+        ```
+
+        ### RB-EXPECTED
+        ```
+        rc == 0 and out("token is") and out("ABSENT")
+        ```
+    """)
+    rc = cli.main(["run", str(md), "--yes", "--operator", "山田",
+                   "--log-dir", str(tmp_path / "logs")])
+    assert rc == 1
+    out = capsys.readouterr().out
+    assert "s3cret-value-xyz" not in out
+    log_dir, result = read_result(tmp_path / "logs")
+    evid = {b["expr"]: b["evidence"] for b in result["steps"][0]["criteria_breakdown"]}
+    # マッチした行が証跡に載るが、値はマスクされている
+    assert "初出 L1" in evid['out("token is")']
+    assert "*****" in evid['out("token is")']
+    assert "s3cret-value-xyz" not in json.dumps(result, ensure_ascii=False)
+    assert "s3cret-value-xyz" not in (log_dir / "run.log").read_text(encoding="utf-8")
+
+
+def test_breakdown_arrows_aligned_with_fullwidth_chars(tmp_path, capsys):
+    """案R6: 全角文字を含む条件式でも → の位置が揃う(len ではなく表示幅で計算)"""
+    md = write_md(tmp_path, """\
+        ## 失敗
+
+        ### RB-CMD
+        ```bash
+        echo hello
+        ```
+
+        ### RB-EXPECTED
+        ```
+        rc == 0 and out("日本語パターン") and out("x")
+        ```
+    """)
+    cli.main(["run", str(md), "--yes", "--operator", "山田",
+              "--log-dir", str(tmp_path / "logs")])
+    lines = [ln for ln in capsys.readouterr().out.splitlines() if "→" in ln and "[" in ln]
+    assert len(lines) == 3
+    columns = {cli.cell_len(ln.split("→")[0]) for ln in lines}
+    assert len(columns) == 1, f"→ の位置が揃っていない: {columns}"
+
+
+def test_sample_output_demo_runs_and_demonstrates_readability(tmp_path, capsys):
+    """samples/output_demo.md が意図どおり途中で失敗し、可読性改善の表示を一通り出す。
+    デモ手順書が改修で壊れていないことを固定する。"""
+    rc = cli.main(["run", "samples/output_demo.md", "--yes", "--operator", "デモ",
+                   "--log-dir", str(tmp_path / "logs")])
+    out = capsys.readouterr().out
+    assert rc == 1, "output_demo.md は意図的に失敗する手順書"
+    assert "ステップ 5「意図的に失敗するステップ" in out  # 案R1: 失敗ステップ名
+    # 案R1: リザルト一覧でステップ6・7が未実行。手順書の説明文にも「未実行」の語が
+    # 出てくるため、一覧表の行(先頭が行番号)だけを数える
+    summary = out.split("・ 実行結果:")[-1]
+    assert len([ln for ln in summary.splitlines() if "未実行" in ln]) == 2
+    assert "← 中断" in out
+    assert "db01=O" in out                                 # 案R2: ホスト別結果の1行表示
+    assert out.count("O=成功") == 2                        # 案R3: 凡例は初回 + 最終マトリックス
+    assert "3行がマッチ" in out                            # 案R6: 判定内訳の実態
+    assert "失敗時ガイダンス" in out                       # RB-ONFAIL
+    assert "終了 " in out                                  # 案R4: 結果行に終了時刻
+
+
+def test_sample_output_demo_check_warning_file_warns(tmp_path, capsys):
+    """samples/output_demo_check_warning.md は案R9 の警告デモなので警告が出ること"""
+    rc = cli.main(["check", "samples/output_demo_check_warning.md"])
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "RB-ONFAIL の内容が空です" in out
+    assert "警告 1 件" in out

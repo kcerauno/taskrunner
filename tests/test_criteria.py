@@ -113,3 +113,56 @@ def test_diagnose_consistent_with_evaluate():
         whole = evaluate(expr, rc, out_s, err_s)
         parts = diagnose(expr, rc, out_s, err_s)
         assert all(ok for _, ok in parts) == whole
+
+
+def test_term_evidence_reports_match_count_and_first_line():
+    """案R6: out() のマッチ行数と初出行を返す(NG時に出力を目で探さずに済む)"""
+    from runbook.criteria import term_evidence
+    stdout = "hello world\nnoise 1\nnoise 2\nnoise 3"
+    ev = term_evidence('not out("noise")', 0, stdout, "")
+    assert "3行がマッチ" in ev
+    assert "初出 L2" in ev
+    assert "noise 1" in ev
+
+
+def test_term_evidence_reports_no_match():
+    from runbook.criteria import term_evidence
+    ev = term_evidence('out("ABSENT")', 0, "hello", "")
+    assert "stdout にマッチなし" in ev
+
+
+def test_term_evidence_includes_actual_rc():
+    from runbook.criteria import term_evidence
+    assert "実際 rc=3" in term_evidence("rc == 0", 3, "", "")
+
+
+def test_term_evidence_targets_err_and_match_separately():
+    from runbook.criteria import term_evidence
+    assert "stderr の1行がマッチ" in term_evidence('err("boom")', 0, "", "boom")
+    assert "stdout+stderr の1行がマッチ" in term_evidence('match("boom")', 0, "", "boom")
+
+
+def test_term_evidence_multiline_pattern_falls_back_to_whole_text():
+    """行をまたぐパターンは行単位検索で拾えないため全文で確認する"""
+    from runbook.criteria import term_evidence
+    ev = term_evidence(r'out("a\nb")', 0, "a\nb", "")
+    assert "複数行にまたがる" in ev
+
+
+def test_term_evidence_truncates_long_line():
+    from runbook.criteria import term_evidence
+    ev = term_evidence('out("x")', 0, "x" * 200, "", max_len=20)
+    assert "…" in ev
+    assert len(ev) < 100
+
+
+def test_term_evidence_invalid_expr_returns_empty():
+    from runbook.criteria import term_evidence
+    assert term_evidence("rc ==", 0, "", "") == ""
+
+
+def test_diagnose_return_shape_unchanged():
+    """案R6 は diagnose の戻り値(2要素タプル)を変えない"""
+    from runbook.criteria import diagnose
+    result = diagnose('rc == 0 and out("A")', 0, "A", "")
+    assert all(isinstance(r, tuple) and len(r) == 2 for r in result)
