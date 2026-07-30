@@ -2,7 +2,7 @@
 
 ```runbook
 vars:
-  INVENTORY: /etc/ansible/hosts
+  INVENTORY: ./samples/local_test/inventory.ini
 ```
 
 注意: 意図しない環境での実行を防ぐため、インベントリは共通設定(上記の runbook フェンス)
@@ -33,7 +33,7 @@ extra_args で任意のオプションも追加できる。
 
 ### RB-CMD
 ```ansible
-df -h /var/lib/mysql
+df -h
 ```
 
 ### RB-LOCALDEF
@@ -41,7 +41,6 @@ df -h /var/lib/mysql
 ansible:
   inventory: "{{INVENTORY}}"
   target: db01
-  extra_args: --become
 timeout: 300
 ```
 
