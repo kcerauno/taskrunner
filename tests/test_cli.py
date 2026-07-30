@@ -819,3 +819,120 @@ def test_sample_output_demo_check_warning_file_warns(tmp_path, capsys):
     assert rc == 0
     assert "RB-ONFAIL の内容が空です" in out
     assert "警告 1 件" in out
+
+
+def test_list_table_has_no_truncated_command(tmp_path, capsys):
+    """一覧表はコマンド列を持たない(60文字切り捨てによる情報の破棄をなくす)"""
+    long_cmd = "echo " + "x" * 200
+    md = write_md(tmp_path, f"""\
+        ## 長いコマンドのステップ
+
+        ### RB-CMD
+        ```bash
+        {long_cmd}
+        ```
+    """)
+    assert cli.main(["list", str(md)]) == 0
+    out = capsys.readouterr().out
+    assert "..." not in out, "切り捨てが残っている"
+    assert "種別" in out and "bash" in out
+    assert "長いコマンドのステップ" in out
+
+
+def test_list_detail_shows_full_command(tmp_path, capsys):
+    """--detail は変数展開後のコマンドを全文表示する(list 単体で全文が読める)"""
+    long_cmd = "echo " + "y" * 150
+    md = write_md(tmp_path, f"""\
+        ```runbook
+        vars:
+          HOST: web01
+        ```
+
+        ## ステップ
+
+        ### RB-CMD
+        ```bash
+        {long_cmd} {{{{HOST}}}}
+        ```
+    """)
+    assert cli.main(["list", "--detail", str(md)]) == 0
+    out = capsys.readouterr().out
+    assert "y" * 150 in out          # 全文が出る
+    assert f"{'y' * 150} web01" in out  # 変数展開後
+
+
+def test_list_without_detail_omits_command_body(tmp_path, capsys):
+    md = write_md(tmp_path, """\
+        ## ステップ
+
+        ### RB-CMD
+        ```bash
+        echo UNIQUE_MARKER_ZZZ
+        ```
+    """)
+    assert cli.main(["list", str(md)]) == 0
+    assert "UNIQUE_MARKER_ZZZ" not in capsys.readouterr().out
+
+
+def test_check_warns_unknown_common_config_key(tmp_path, capsys):
+    """共通設定の未知キーは黙って無視されるため check で警告する"""
+    md = write_md(tmp_path, """\
+        ```runbook
+        vars:
+          A: b
+        foo: 1
+        ```
+
+        ## S1
+
+        ### RB-CMD
+        ```bash
+        true
+        ```
+    """)
+    assert cli.main(["check", str(md)]) == 0
+    out = capsys.readouterr().out
+    assert "「foo」は解釈されません" in out
+
+
+def test_check_warns_timeout_in_common_config(tmp_path, capsys):
+    """共通設定の timeout は効かず既定は無制限待ち。事故になるので具体的に案内する"""
+    md = write_md(tmp_path, """\
+        ```runbook
+        timeout: 5
+        ```
+
+        ## S1
+
+        ### RB-CMD
+        ```bash
+        true
+        ```
+    """)
+    assert cli.main(["check", str(md)]) == 0
+    out = capsys.readouterr().out
+    assert "「timeout」は解釈されません" in out
+    assert "RB-LOCALDEF" in out
+    assert "無制限" in out
+
+
+def test_check_no_warning_for_known_common_config_keys(tmp_path, capsys):
+    md = write_md(tmp_path, """\
+        ```runbook
+        title: タイトル
+        vars:
+          A: b
+        secrets: [A]
+        ansible:
+          host_matrix: true
+        ```
+
+        ## S1
+
+        ### RB-CMD
+        ```bash
+        true
+        ```
+    """)
+    assert cli.main(["check", str(md)]) == 0
+    assert "解釈されません" not in capsys.readouterr().out

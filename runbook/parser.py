@@ -125,6 +125,8 @@ class Procedure:
     vars: dict[str, str] = field(default_factory=dict)
     steps: list[Step] = field(default_factory=list)
     secrets: list[str] = field(default_factory=list)  # 共通設定 secrets: [VAR] で値を表示・ログからマスクする変数名
+    # ```runbook フェンスに書かれていたが解釈されなかったキー(check で警告する)
+    unknown_config_keys: list[str] = field(default_factory=list)
 
 
 def _split_frontmatter(text: str) -> tuple[dict, str, int]:
@@ -528,6 +530,10 @@ def _reject_config_in_frontmatter(frontmatter: dict) -> None:
             f"(frontmatter は一般的な Markdown メタデータ用で、runbook は解釈しません)")
 
 
+# ```runbook(共通設定)フェンスで使用できるキー。これ以外は無視されるため check で警告する
+_COMMON_CONFIG_KEYS = {"title", "vars", "ansible", "secrets"}
+
+
 def _extract_preamble_config(preamble_lines: list[str]) -> dict:
     """前書き(最初の ## より前)の ```runbook フェンスから共通設定を取り出す。
 
@@ -606,6 +612,10 @@ def parse_file(path: str | Path, extra_vars: dict[str, str] | None = None) -> Pr
 
     meta = _extract_preamble_config(preamble)
     title = str(meta.get("title", "")) or title_heading
+    # 互換のため未知キーは無視して読み進めるが、書いた本人は効いていると思い込む。
+    # 特に timeout は「共通設定に書いたが実際は無制限に待つ」事故になるため、
+    # 記録だけ残して check で警告する(パースはエラーにしない)。
+    unknown_config_keys = sorted(set(meta) - _COMMON_CONFIG_KEYS)
 
     variables = {str(k): str(v) for k, v in (meta.get("vars") or {}).items()}
     variables.update(extra_vars or {})
@@ -657,4 +667,4 @@ def parse_file(path: str | Path, extra_vars: dict[str, str] | None = None) -> Pr
                              f"(共通設定の vars か --var で定義してください)")
 
     return Procedure(path=path, title=title or path.stem, vars=variables, steps=steps,
-                     secrets=secrets)
+                     secrets=secrets, unknown_config_keys=unknown_config_keys)

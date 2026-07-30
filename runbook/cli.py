@@ -604,6 +604,11 @@ def cmd_list(args: argparse.Namespace) -> int:
     proc = parser.parse_file(args.file, parse_vars(args.var))
     mask = make_mask(proc)
     console.print(step_table(f"{proc.title} ({proc.path})", proc.steps, mask))
+    # 一覧表はコマンドを持たないので、全文を見たいときは詳細ブロックを出す
+    # (check --preview の第2部と同じ表示部品を使う)
+    if args.detail:
+        for s in proc.steps:
+            show_step_header(s, len(proc.steps), mask, preview=True)
     return 0
 
 
@@ -672,6 +677,14 @@ def cmd_check(args: argparse.Namespace) -> int:
                 f"ステップ{s.number}「{s.title}」: "
                 f"見出しの番号 {s.heading_number} が実際の順序 {s.number} と不一致です"
                 f"(runbook renumber で振り直せます)")
+    # 共通設定(```runbook フェンス)の未知キー。互換のため解析は通すが、
+    # 書いた本人は効いていると思い込むので警告する。
+    for key in proc.unknown_config_keys:
+        note = ("ステップ単位の RB-LOCALDEF に書いてください"
+                "(共通設定では効かず、既定はタイムアウトなし=無制限に待ちます)"
+                if key == "timeout" else "無視されます")
+        warnings_.append(f"共通設定(```runbook)のキー「{key}」は解釈されません。{note}")
+
     # 案R9: 見出しはあるが本文が空の自由記述セクション。特に RB-ONFAIL は
     # 失敗して中断した瞬間にしか表示されないため、空だと気付く機会が事実上ない。
     for s in proc.steps:
@@ -761,6 +774,8 @@ def build_argparser() -> argparse.ArgumentParser:
 
     p_list = sub.add_parser("list", help="ステップ一覧を表示する")
     add_common(p_list)
+    p_list.add_argument("--detail", action="store_true",
+                        help="一覧に加えて、変数展開後の実行コマンドを全文表示する")
     p_list.set_defaults(func=cmd_list)
 
     p_check = sub.add_parser(

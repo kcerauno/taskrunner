@@ -193,17 +193,27 @@ def result_table(steps, records, selected: set[int], aborted_at: int | None = No
     return table
 
 
+# 一覧表の「種別」列: Step.runner → 表示名
+_RUNNER_LABELS = {"shell": "bash", "ansible": "ansible", "playbook": "playbook", "manual": "手動"}
+
+
 def step_table(title: str, steps, mask=lambda t: t) -> Table:
+    """ステップ一覧表(俯瞰用)。
+
+    コマンドは列に入れない。表の幅では必ず切り捨てが必要になり、折り返しても
+    パスが単語途中で分断されて読めないため(実測で確認)、全文の表示は
+    詳細ブロック(show_step_header)側に任せる。ここは「何番・何をする・種別・
+    合否条件」の俯瞰に徹し、どの列も切り捨てない。
+    """
     table = Table(title=title)
     table.add_column("No.", justify="right")
-    table.add_column("ステップ")
-    table.add_column("コマンド", overflow="fold")
+    table.add_column("ステップ", overflow="fold")
+    table.add_column("種別")
     table.add_column("正常性基準", overflow="fold")
     for s in steps:
+        label = _RUNNER_LABELS.get(s.runner, s.runner)
         if s.runner == "manual":
-            table.add_row(str(s.number), s.title, "(手動ステップ)", "作業者の完了確認")
+            table.add_row(str(s.number), s.title, label, "作業者の完了確認")
             continue
-        cmd = mask(s.command)
-        cmd = cmd if len(cmd) <= 60 else cmd[:57] + "..."
-        table.add_row(str(s.number), s.title, cmd, mask(s.criteria))
+        table.add_row(str(s.number), s.title, label, mask(s.criteria))
     return table
