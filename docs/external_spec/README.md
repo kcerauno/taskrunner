@@ -10,7 +10,7 @@
 | ドキュメント | 内容 |
 |---|---|
 | [01_overview.md](01_overview.md) | 目的、設計原則、動作環境、全体像、用語定義 |
-| [02_runbook_format.md](02_runbook_format.md) | 手順書 Markdown ファイルの書式仕様(共通設定・ステップ・変数・ansible/playbook・切り戻し) |
+| [02_runbook_format.md](02_runbook_format.md) | 手順書 Markdown ファイルの書式仕様(共通設定・ステップ・変数・ansible/playbook) |
 | [03_criteria.md](03_criteria.md) | 正常性基準式(RB-EXPECTED)の言語仕様と評価規則 |
 | [04_cli.md](04_cli.md) | CLI 仕様(サブコマンド・オプション・対話フロー・終了コード) |
 | [05_execution_logging.md](05_execution_logging.md) | 実行モデル(コマンド実行・判定・中断・マスキング)とログ成果物の仕様 |
