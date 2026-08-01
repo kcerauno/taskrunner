@@ -936,3 +936,90 @@ def test_check_no_warning_for_known_common_config_keys(tmp_path, capsys):
     """)
     assert cli.main(["check", str(md)]) == 0
     assert "解釈されません" not in capsys.readouterr().out
+
+
+# --- check --json(エディタ統合用の機械可読出力) --------------------------
+
+def test_check_json_ok(tmp_path, capsys):
+    md = write_md(tmp_path, """\
+        ## S1
+
+        ### RB-CMD
+        ```bash
+        true
+        ```
+    """)
+    rc = cli.main(["check", "--json", str(md)])
+    assert rc == 0
+    payload = json.loads(capsys.readouterr().out.strip())
+    assert payload["ok"] is True
+    assert payload["steps"] == 1
+    assert payload["diagnostics"] == []
+
+
+def test_check_json_warning_has_step_line(tmp_path, capsys):
+    """警告にはステップ番号と見出しの行番号が付く(エディタが波線を引ける)"""
+    md = write_md(tmp_path, """\
+        ## S1
+
+        ### RB-CMD
+        ```bash
+        true
+        ```
+
+        ### RB-ONFAIL
+        ```
+        フェンスで囲んでしまった
+        ```
+    """)
+    rc = cli.main(["check", "--json", str(md)])
+    assert rc == 0
+    payload = json.loads(capsys.readouterr().out.strip())
+    assert payload["ok"] is True
+    (diag,) = payload["diagnostics"]
+    assert diag["severity"] == "warning"
+    assert diag["step"] == 1
+    assert diag["line"] == 1
+    assert "RB-ONFAIL" in diag["message"]
+
+
+def test_check_json_criteria_error(tmp_path, capsys):
+    md = write_md(tmp_path, """\
+        ## S1
+
+        ### RB-CMD
+        ```bash
+        true
+        ```
+
+        ### RB-EXPECTED
+        ```
+        rc == 0 and
+        ```
+    """)
+    rc = cli.main(["check", "--json", str(md)])
+    assert rc == 1
+    payload = json.loads(capsys.readouterr().out.strip())
+    assert payload["ok"] is False
+    (diag,) = payload["diagnostics"]
+    assert diag["severity"] == "error"
+    assert diag["line"] == 1
+
+
+def test_check_json_parse_error_reports_line_zero(tmp_path, capsys):
+    """パースエラーは行を特定できないので line: 0(ファイル先頭)で返す"""
+    md = write_md(tmp_path, """\
+        ## S1
+
+        ### RB-CMD
+        ```bash
+        echo {{UNDEFINED}}
+        ```
+    """)
+    rc = cli.main(["check", "--json", str(md)])
+    assert rc == 1
+    payload = json.loads(capsys.readouterr().out.strip())
+    assert payload["ok"] is False
+    (diag,) = payload["diagnostics"]
+    assert diag["severity"] == "error"
+    assert diag["line"] == 0

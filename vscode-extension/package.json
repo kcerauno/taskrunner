@@ -1,0 +1,65 @@
+{
+  "name": "runbook-md",
+  "displayName": "runbook — Markdown手順書 入力支援",
+  "description": "runbook 形式の Markdown 手順書の入力支援(スニペット・色分け・アウトライン・runbook check 連携)",
+  "version": "0.1.0",
+  "publisher": "wk-tool",
+  "license": "MIT",
+  "engines": { "vscode": "^1.75.0" },
+  "categories": ["Snippets", "Linters", "Programming Languages"],
+  "main": "./extension.js",
+  "activationEvents": ["onLanguage:markdown"],
+  "contributes": {
+    "snippets": [
+      { "language": "markdown", "path": "./snippets/runbook.json" }
+    ],
+    "grammars": [
+      {
+        "scopeName": "markdown.runbook.injection",
+        "path": "./syntaxes/runbook-injection.json",
+        "injectTo": ["text.html.markdown"]
+      }
+    ],
+    "commands": [
+      { "command": "runbook.check", "title": "runbook: 検証する (check)" },
+      { "command": "runbook.checkPreview", "title": "runbook: 展開後コマンドを確認する (check --preview)" },
+      { "command": "runbook.list", "title": "runbook: ステップ一覧を表示する (list --detail)" },
+      { "command": "runbook.renumber", "title": "runbook: 見出しの連番を振り直す (renumber)" },
+      { "command": "runbook.run", "title": "runbook: 逐次実行する (run -i)" }
+    ],
+    "menus": {
+      "editor/context": [
+        {
+          "command": "runbook.check",
+          "when": "resourceLangId == markdown",
+          "group": "runbook@1"
+        },
+        {
+          "command": "runbook.checkPreview",
+          "when": "resourceLangId == markdown",
+          "group": "runbook@2"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "runbook",
+      "properties": {
+        "runbook.executablePath": {
+          "type": "string",
+          "default": "runbook",
+          "description": "runbook 実行ファイルのパス(例: ${workspaceFolder}/.venv/bin/runbook)"
+        },
+        "runbook.checkOnSave": {
+          "type": "boolean",
+          "default": true,
+          "description": "保存時に runbook check --json を実行して診断を表示する"
+        },
+        "runbook.diagnosticsEnabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "診断(赤波線・黄波線)を表示する"
+        }
+      }
+    }
+  }
+}

@@ -22,6 +22,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import re
 import shutil
 import signal
@@ -652,50 +653,97 @@ def _check_paths(steps) -> list[str]:
     return list(dict.fromkeys(warns))  # 同一ファイルを複数行が参照する場合の重複を除去
 
 
-def cmd_check(args: argparse.Namespace) -> int:
-    errors: list[str] = []
-    try:
-        proc = parser.parse_file(args.file, parse_vars(args.var))
-    except parser.ParseError as e:
-        console.print(f"[bold red]NG[/bold red] {e}")
-        return 1
+def collect_check_diagnostics(proc) -> tuple[list[dict], list[dict]]:
+    """検証結果を (エラー, 警告) の構造化リストで返す。
+
+    各要素は {"line": 手順書内の行番号(1始まり。不明なら 0),
+              "step": ステップ番号(なければ None), "message": 本文}。
+    テキスト表示(cmd_check)と --json 出力の両方がこれを使う。
+    """
+    errors: list[dict] = []
     for s in proc.steps:
         if s.runner == "manual":
             continue  # 手動ステップに基準式はない
         try:
             criteria.validate(s.criteria)
         except criteria.CriteriaError as e:
-            errors.append(f"ステップ{s.number}「{s.title}」(L{s.line}): {e}")
+            errors.append({"line": s.line, "step": s.number,
+                           "message": f"ステップ{s.number}「{s.title}」(L{s.line}): {e}"})
     if errors:
-        for e in errors:
-            console.print(f"[bold red]NG[/bold red] {e}")
-        return 1
-    warnings_: list[str] = []
+        return errors, []
+
+    warnings_: list[dict] = []
+
+    def warn(message: str, step=None) -> None:
+        warnings_.append({"line": step.line if step else 0,
+                          "step": step.number if step else None,
+                          "message": message})
+
     for s in proc.steps:
         if s.heading_number is not None and s.heading_number != s.number:
-            warnings_.append(
-                f"ステップ{s.number}「{s.title}」: "
-                f"見出しの番号 {s.heading_number} が実際の順序 {s.number} と不一致です"
-                f"(runbook renumber で振り直せます)")
+            warn(f"ステップ{s.number}「{s.title}」: "
+                 f"見出しの番号 {s.heading_number} が実際の順序 {s.number} と不一致です"
+                 f"(runbook renumber で振り直せます)", s)
     # 共通設定(```runbook フェンス)の未知キー。互換のため解析は通すが、
     # 書いた本人は効いていると思い込むので警告する。
     for key in proc.unknown_config_keys:
         note = ("ステップ単位の RB-LOCALDEF に書いてください"
                 "(共通設定では効かず、既定はタイムアウトなし=無制限に待ちます)"
                 if key == "timeout" else "無視されます")
-        warnings_.append(f"共通設定(```runbook)のキー「{key}」は解釈されません。{note}")
+        warn(f"共通設定(```runbook)のキー「{key}」は解釈されません。{note}")
 
     # 案R9: 見出しはあるが本文が空の自由記述セクション。特に RB-ONFAIL は
     # 失敗して中断した瞬間にしか表示されないため、空だと気付く機会が事実上ない。
     for s in proc.steps:
         for name in s.empty_sections:
-            warnings_.append(
-                f"ステップ{s.number}「{s.title}」: {name} の内容が空です"
-                f"(コードフェンス ``` の中に書かれている可能性があります。"
-                f"{name} はフェンスなしで記述してください)")
-    warnings_ += _check_paths(proc.steps)
+            warn(f"ステップ{s.number}「{s.title}」: {name} の内容が空です"
+                 f"(コードフェンス ``` の中に書かれている可能性があります。"
+                 f"{name} はフェンスなしで記述してください)", s)
+
+    by_number = {s.number: s for s in proc.steps}
+    for text in _check_paths(proc.steps):
+        m = re.match(r"ステップ(\d+)", text)
+        warn(text, by_number.get(int(m.group(1))) if m else None)
+    return errors, warnings_
+
+
+def cmd_check_json(args: argparse.Namespace) -> int:
+    """機械可読出力(VSCode 拡張などのエディタ統合用)。stdout に JSON 1 件のみ。"""
+    def emit(payload: dict, code: int) -> int:
+        print(json.dumps(payload, ensure_ascii=False))
+        return code
+
+    path = str(Path(args.file))
+    try:
+        proc = parser.parse_file(args.file, parse_vars(args.var))
+    except (parser.ParseError, ValueError, OSError) as e:
+        return emit({"ok": False, "path": path, "steps": 0,
+                     "diagnostics": [{"severity": "error", "line": 0, "step": None,
+                                      "message": str(e)}]}, 1)
+    errors, warnings_ = collect_check_diagnostics(proc)
+    diagnostics = ([dict(d, severity="error") for d in errors]
+                   + [dict(d, severity="warning") for d in warnings_])
+    return emit({"ok": not errors, "path": path, "steps": len(proc.steps),
+                 "diagnostics": diagnostics}, 1 if errors else 0)
+
+
+def cmd_check(args: argparse.Namespace) -> int:
+    if getattr(args, "json", False):
+        return cmd_check_json(args)
+    errors: list[str] = []
+    try:
+        proc = parser.parse_file(args.file, parse_vars(args.var))
+    except parser.ParseError as e:
+        console.print(f"[bold red]NG[/bold red] {e}")
+        return 1
+    errors_, warnings_ = collect_check_diagnostics(proc)
+    errors = [d["message"] for d in errors_]
+    if errors:
+        for e in errors:
+            console.print(f"[bold red]NG[/bold red] {e}")
+        return 1
     for w in warnings_:
-        console.print(f"[bold yellow]警告[/bold yellow] {escape(w)}")
+        console.print(f"[bold yellow]警告[/bold yellow] {escape(w['message'])}")
     summary = f"{len(proc.steps)} ステップ"
     note = f"(警告 {len(warnings_)} 件)" if warnings_ else ""
     console.print(f"[bold green]OK[/bold green] {proc.path}: {summary}、書式・基準式に問題ありません{note}")
@@ -782,6 +830,8 @@ def build_argparser() -> argparse.ArgumentParser:
         "check",
         help="手順書の書式・基準式・参照パス(インベントリ/playbook/cwd)を検証する(実行しない)")
     add_common(p_check)
+    p_check.add_argument("--json", action="store_true",
+                         help="検証結果を行番号付きの JSON で出力する(エディタ統合用)")
     p_check.add_argument("--preview", action="store_true",
                          help="変数展開・ansibleコマンド組み立て後の実行コマンドを全文表示する")
     p_check.set_defaults(func=cmd_check)

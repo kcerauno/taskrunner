@@ -1,0 +1,156 @@
+{
+  "runbook: ステップ(コマンド)": {
+    "prefix": "rbstep",
+    "body": [
+      "## ${1:ステップのタイトル}",
+      "",
+      "### RB-DESCRIPTION",
+      "${2:作業者向けの説明}",
+      "",
+      "### RB-CMD",
+      "```bash",
+      "${3:command}",
+      "```",
+      "",
+      "### RB-EXPECTED",
+      "```",
+      "${4:rc == 0}",
+      "```",
+      "$0"
+    ],
+    "description": "コマンドステップの雛形(DESCRIPTION / CMD / EXPECTED)"
+  },
+  "runbook: 手動ステップ": {
+    "prefix": "rbmanual",
+    "body": [
+      "## ${1:目視確認・手作業のタイトル}",
+      "",
+      "### RB-DESCRIPTION",
+      "${2:作業者に何をしてほしいかを具体的に書く}",
+      "$0"
+    ],
+    "description": "手動ステップ(RB-CMD なし。RB-DESCRIPTION が必須)"
+  },
+  "runbook: 共通設定フェンス": {
+    "prefix": "rbconfig",
+    "body": [
+      "```runbook",
+      "vars:",
+      "  ${1:TARGET_HOST}: ${2:web01}",
+      "```",
+      "$0"
+    ],
+    "description": "前書きに置く共通設定(title / vars / ansible / secrets)"
+  },
+  "runbook: 共通設定(secrets 付き)": {
+    "prefix": "rbconfigfull",
+    "body": [
+      "```runbook",
+      "title: ${1:手順書タイトル}",
+      "vars:",
+      "  ${2:TARGET_HOST}: ${3:web01}",
+      "  ${4:DB_PASS}: ${5:\"\"}",
+      "secrets: [${4:DB_PASS}]",
+      "```",
+      "$0"
+    ],
+    "description": "title / vars / secrets を含む共通設定"
+  },
+  "runbook: RB-CMD": {
+    "prefix": "rbcmd",
+    "body": ["### RB-CMD", "```bash", "${1:command}", "```", "$0"],
+    "description": "実行するコマンド"
+  },
+  "runbook: RB-CMD (ansible)": {
+    "prefix": "rbansible",
+    "body": [
+      "### RB-CMD",
+      "```ansible",
+      "-i ${1:inventory.ini} ${2:web} -m ${3:shell} -a '${4:uptime}'",
+      "```",
+      "$0"
+    ],
+    "description": "ansible ad-hoc ラッパー"
+  },
+  "runbook: RB-CMD (playbook)": {
+    "prefix": "rbplaybook",
+    "body": [
+      "### RB-CMD",
+      "```playbook",
+      "-i ${1:inventory.ini} ${2:site.yml}",
+      "```",
+      "$0"
+    ],
+    "description": "ansible-playbook ラッパー"
+  },
+  "runbook: RB-EXPECTED": {
+    "prefix": "rbexpected",
+    "body": ["### RB-EXPECTED", "```", "${1:rc == 0 and out(\"${2:pattern}\")}", "```", "$0"],
+    "description": "正常性基準(省略時は rc == 0)"
+  },
+  "runbook: RB-EXPECTED (よく使う形)": {
+    "prefix": "rbexpected2",
+    "body": [
+      "### RB-EXPECTED",
+      "```",
+      "rc == 0 and out(\"${1:active \\\\(running\\\\)}\") and not out(\"${2:ERROR|FATAL}\")",
+      "```",
+      "$0"
+    ],
+    "description": "終了コード + 期待文字列 + 禁止文字列"
+  },
+  "runbook: RB-DESCRIPTION": {
+    "prefix": "rbdesc",
+    "body": ["### RB-DESCRIPTION", "${1:作業者向けの説明}", "$0"],
+    "description": "作業者向けの説明"
+  },
+  "runbook: RB-ONFAIL": {
+    "prefix": "rbonfail",
+    "body": [
+      "### RB-ONFAIL",
+      "${1:まず何を確認するか。次にどの手順書へ行くか。誰にエスカレーションするか。}",
+      "$0"
+    ],
+    "description": "失敗して中断した瞬間に表示するガイダンス(フェンスで囲まない)"
+  },
+  "runbook: RB-LOCALDEF": {
+    "prefix": "rblocaldef",
+    "body": [
+      "### RB-LOCALDEF",
+      "```yaml",
+      "timeout: ${1:300}",
+      "cwd: ${2:/var/tmp}",
+      "```",
+      "$0"
+    ],
+    "description": "ステップ個別設定(timeout / cwd / ansible)"
+  },
+  "runbook: 手順書テンプレート": {
+    "prefix": "rbtemplate",
+    "body": [
+      "# ${1:手順書タイトル}",
+      "",
+      "```runbook",
+      "vars:",
+      "  ${2:TARGET_HOST}: ${3:web01}",
+      "```",
+      "",
+      "## 1. ${4:最初のステップ}",
+      "",
+      "### RB-DESCRIPTION",
+      "${5:このステップで何をするか}",
+      "",
+      "### RB-CMD",
+      "```bash",
+      "${6:command}",
+      "```",
+      "",
+      "### RB-EXPECTED",
+      "```",
+      "rc == 0",
+      "```",
+      "$0"
+    ],
+    "description": "手順書ファイル全体の雛形"
+  }
+}

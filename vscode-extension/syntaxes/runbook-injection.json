@@ -1,0 +1,32 @@
+{
+  "scopeName": "markdown.runbook.injection",
+  "injectionSelector": "L:text.html.markdown",
+  "patterns": [
+    { "include": "#rb-section" },
+    { "include": "#rb-config-fence" },
+    { "include": "#rb-var" }
+  ],
+  "repository": {
+    "rb-section": {
+      "comment": "### RB-CMD / RB-EXPECTED / ... のセクション見出し",
+      "match": "^(###)\\s+((?i:RB-(?:CMD|EXPECTED|DESCRIPTION|LOCALDEF|ONFAIL)))\\s*$",
+      "captures": {
+        "1": { "name": "punctuation.definition.heading.markdown" },
+        "2": { "name": "entity.name.tag.runbook keyword.control.runbook" }
+      }
+    },
+    "rb-config-fence": {
+      "comment": "```runbook 共通設定フェンスの開始行",
+      "match": "^\\s*(```)(runbook)\\s*$",
+      "captures": {
+        "1": { "name": "punctuation.definition.markdown" },
+        "2": { "name": "entity.name.tag.runbook keyword.control.runbook" }
+      }
+    },
+    "rb-var": {
+      "comment": "{{VAR}} 変数参照",
+      "match": "\\{\\{\\s*[A-Za-z_][A-Za-z0-9_]*\\s*\\}\\}",
+      "name": "variable.other.runbook constant.character.escape"
+    }
+  }
+}

@@ -1,0 +1,12 @@
+{
+  "runbook.executablePath": "${workspaceFolder}/.venv/bin/runbook",
+  "[markdown]": {
+    "editor.quickSuggestions": {
+      "other": true,
+      "comments": false,
+      "strings": false
+    },
+    "editor.snippetSuggestions": "top",
+    "editor.wordBasedSuggestions": "off"
+  }
+}

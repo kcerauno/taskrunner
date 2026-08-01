@@ -34,6 +34,7 @@ cd ~/wk_tool
 ```bash
 runbook check 手順書.md              # 書式・基準式・変数・参照パスの検証のみ(実行しない)
 runbook check --preview 手順書.md    # 検証に加えて展開後の実行コマンドを全文表示
+runbook check --json 手順書.md       # 検証結果を行番号付き JSON で出力(エディタ統合用)
 runbook list  手順書.md              # ステップ一覧表示
 runbook list --detail 手順書.md      # 一覧に加えて展開後の実行コマンドを全文表示
 runbook renumber 手順書.md           # ## 見出しに実行順の連番(1. 2. ...)を付与/振り直し
@@ -661,6 +662,26 @@ runbook run --start-from 12 手順書.md    # 原因を解消してから12以�
 ```bash
 runbook check --preview --var HOST=web02 手順書.md
 ```
+
+`--json` を付けると、検証結果を**行番号付きの JSON** で標準出力に 1 件だけ出す
+(エディタ統合用。人間向けの表示は出ない)。
+
+```bash
+runbook check --json 手順書.md
+{"ok": false, "path": "手順書.md", "steps": 4,
+ "diagnostics": [{"line": 31, "step": 1, "severity": "warning", "message": "..."}]}
+```
+
+`line` はステップ見出しの行番号(1始まり)。パースエラーは行を特定できないため `0`。
+`severity` は `error` / `warning`。exit code はテキスト出力時と同じ(エラーがあれば 1)。
+
+## VSCode 拡張(入力支援)
+
+`vscode-extension/` に、手順書を書くための VSCode 拡張がある(ビルド不要)。
+スニペット、`### RB-*` の色分け、ステップのアウトライン表示、保存時の
+`runbook check --json` による診断(赤波線・黄波線)、エディタからの
+check/list/renumber/run 実行を提供する。導入方法は
+[vscode-extension/README.md](vscode-extension/README.md) を参照。
 
 ## 実行ログ(エビデンス)
 
