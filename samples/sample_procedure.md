@@ -27,6 +27,11 @@ rc == 0 and out("Filesystem|ファイルシス") and not out(" 100%")
 ### RB-DESCRIPTION
 カーネル情報を取得し、期待するOS種別であることを確認する。
 
+### RB-LOCALDEF
+```yaml
+timeout: 30
+```
+
 ### RB-CMD
 ```bash
 uname -a
@@ -35,11 +40,6 @@ uname -a
 ### RB-EXPECTED
 ```
 rc == 0 and out("{{KEYWORD}}")
-```
-
-### RB-LOCALDEF
-```yaml
-timeout: 30
 ```
 
 ## 作業ファイルの作成と確認

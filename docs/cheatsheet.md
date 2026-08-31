@@ -61,6 +61,15 @@ secrets: [DB_PASS]           # 任意: 値をマスクする変数
 ### RB-DESCRIPTION
 作業説明(フェンスで囲まない)
 
+### RB-LOCALDEF
+```yaml
+timeout: 300
+cwd: /var/tmp
+ansible:
+  inventory: hosts.ini
+  target: db01
+```
+
 ### RB-CMD
 ```bash
 echo hello
@@ -71,21 +80,13 @@ echo hello
 rc == 0 and out("hello")
 ```
 
-### RB-LOCALDEF
-```yaml
-timeout: 300
-cwd: /var/tmp
-ansible:
-  inventory: hosts.ini
-  target: db01
-```
-
 ### RB-ONFAIL
 失敗時に表示するガイダンス(フェンスで囲まない)
 ````
 
 - `## ` 見出し 1 つ = 1 ステップ。**記載順 = 実行順 = ステップ番号**
-- セクションは `RB-DESCRIPTION` / `RB-CMD` / `RB-EXPECTED` / `RB-LOCALDEF` / `RB-ONFAIL` の5種のみ
+- セクションは `RB-DESCRIPTION` / `RB-LOCALDEF` / `RB-CMD` / `RB-EXPECTED` / `RB-ONFAIL` の5種のみ
+  (記載順は自由。上の順=説明 → 実行先 → コマンド → 判定 → 失敗時、が推奨)
 - `RB-CMD` がないステップ = **手動ステップ**(`RB-DESCRIPTION` 必須。`y` 入力を待つ)
 - 共通設定は最初の `## ` より**前**。frontmatter には書けない(エラー)
 

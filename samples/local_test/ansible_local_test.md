@@ -9,21 +9,23 @@ ansible:
   host_matrix: true
 ```
 
+------------------------------------------------------------------------------------
+
 ## 1. 全6ホストの疎通確認
 
 ### RB-DESCRIPTION
 インベントリの全擬似ホスト(web01-03, db01-02, mon01)で hostname と実行ユーザを表示する。
 6ホスト全てが応答し、UNREACHABLE/FAILED がないことを確認する。
 
-### RB-CMD
-```ansible
-echo "host=$(hostname) user=$(id -un)"
-```
-
 ### RB-LOCALDEF
 ```yaml
 ansible:
   inventory: "{{INVENTORY}}"
+```
+
+### RB-CMD
+```ansible
+echo "host=$(hostname) user=$(id -un)"
 ```
 
 ### RB-EXPECTED
@@ -33,6 +35,8 @@ out("web01 \| CHANGED") and out("web02 \| CHANGED") and out("web03 \| CHANGED") 
 out("db01 \| CHANGED") and out("db02 \| CHANGED") and out("mon01 \| CHANGED") and
 not out("UNREACHABLE|FAILED")
 ```
+
+------------------------------------------------------------------------------------
 
 ## 2. local uname
 
@@ -50,16 +54,13 @@ echo hoge
 rc == 0
 ```
 
+------------------------------------------------------------------------------------
+
 ## 3. webservers グループのみ負荷確認
 
 ### RB-DESCRIPTION
 web01〜web03 の3ホストだけを対象に uptime を実行する(並列度6)。
 dbservers/monitoring のホストが混ざっていないことも確認する。
-
-### RB-CMD
-```ansible
-uptime
-```
 
 ### RB-LOCALDEF
 ```yaml
@@ -70,6 +71,11 @@ ansible:
 timeout: 120
 ```
 
+### RB-CMD
+```ansible
+uptime
+```
+
 ### RB-EXPECTED
 ```
 rc == 0 and
@@ -78,16 +84,13 @@ not out("db01|db02|mon01") and
 not out("UNREACHABLE|FAILED")
 ```
 
+------------------------------------------------------------------------------------
+
 ## 4. db01 単一ホストのディスク確認
 
 ### RB-DESCRIPTION
 ステップ設定で target を単一ホスト db01 に上書きし、ディスク使用率を確認する。
 使用率100%のファイルシステムがないこと。
-
-### RB-CMD
-```ansible
-df -h /
-```
 
 ### RB-LOCALDEF
 ```yaml
@@ -96,10 +99,17 @@ ansible:
   target: db01
 ```
 
+### RB-CMD
+```ansible
+df -h /
+```
+
 ### RB-EXPECTED
 ```
 rc == 0 and out("db01 \| CHANGED") and not out(" 100%|UNREACHABLE|FAILED")
 ```
+
+------------------------------------------------------------------------------------
 
 ## 5. Playbook による稼働確認
 
@@ -108,11 +118,6 @@ playbook フェンスにプレイブックのファイルパスを書くと ansi
 target(webservers)は -l として適用され、手順書の変数は -e で渡るので
 プレイブック内の jinja2 から CHECK_LABEL をそのまま参照できる。
 
-### RB-CMD
-```playbook
-samples/local_test/site_check.yml
-```
-
 ### RB-LOCALDEF
 ```yaml
 ansible:
@@ -120,10 +125,17 @@ ansible:
   target: webservers
 ```
 
+### RB-CMD
+```playbook
+samples/local_test/site_check.yml
+```
+
 ### RB-EXPECTED
 ```
 rc == 0 and out("failed=0") and not out("failed=[1-9]|unreachable=[1-9]")
 ```
+
+------------------------------------------------------------------------------------
 
 ## 6. 手順書変数と jinja2 の混在確認
 
@@ -131,6 +143,13 @@ rc == 0 and out("failed=0") and not out("failed=[1-9]|unreachable=[1-9]")
 ansible フェンス内では手順書の変数({{CHECK_LABEL}} など)は extra-vars として渡され、
 ansible のマジック変数({{ inventory_hostname }} など)と同じ記法で共存できる。
 webservers の各ホストが自分のホスト名(web01〜web03)を報告することを確認する。
+
+### RB-LOCALDEF
+```yaml
+ansible:
+  inventory: "{{INVENTORY}}"
+  target: webservers
+```
 
 ### RB-CMD
 ```ansible
@@ -141,13 +160,6 @@ echo "{{CHECK_LABEL}}: {{ inventory_hostname }} は正常です"
 echo "{{CHECK_LABEL}}: {{ inventory_hostname }} は正常ですよーーーーー"
 ```
 
-
-### RB-LOCALDEF
-```yaml
-ansible:
-  inventory: "{{INVENTORY}}"
-  target: webservers
-```
 
 ### RB-EXPECTED
 ```

@@ -14,6 +14,12 @@
     ### RB-DESCRIPTION
     自由記述の説明文。
 
+    ### RB-LOCALDEF     ← 省略可
+    ```yaml
+    timeout: 300
+    cwd: /var/tmp
+    ```
+
     ### RB-CMD
     ```bash
     df -h /
@@ -24,12 +30,6 @@
     rc == 0 and out("/dev/") and not out("100%")
     ```
 
-    ### RB-LOCALDEF     ← 省略可
-    ```yaml
-    timeout: 300
-    cwd: /var/tmp
-    ```
-
 - 共通設定(title / vars / ansible / secrets)は最初の「## 」より前に置く
   ```runbook フェンス(YAML)で定義する。
 - RB-CMD のないステップは「手動ステップ」(runner="manual")。目視確認や手作業を
@@ -37,6 +37,9 @@
   作業者の完了確認を待つ。
 - 「### RB-ONFAIL」(省略可)は、そのステップが失敗して中断した瞬間に表示する
   作業者向けガイダンス(自由記述)。
+- セクションの記載順はパース結果に影響しない(順不同)。ただし読み手が
+  「何を → どこで・どう → 何を実行 → 合否 → 失敗時」の順に読めるよう、
+  RB-DESCRIPTION → RB-LOCALDEF → RB-CMD → RB-EXPECTED → RB-ONFAIL を推奨順とする。
 - 「# RB-ROLLBACK」見出し(切り戻し機能)は v0.5.0 で削除された。フェンス外で
   検出した場合はパースエラーとし、切り戻し手順は別ファイルの手順書として
   作成するよう案内する。
@@ -72,7 +75,7 @@ _SECTION_ALIASES = {
     "rb-localdef": "options",
     "rb-onfail": "onfail",
 }
-_SECTION_NAMES = "RB-DESCRIPTION/RB-CMD/RB-EXPECTED/RB-LOCALDEF/RB-ONFAIL"
+_SECTION_NAMES = "RB-DESCRIPTION/RB-LOCALDEF/RB-CMD/RB-EXPECTED/RB-ONFAIL"
 
 # v0.5.0 で削除された切り戻し機能の見出し。フェンス外で検出したら即エラーにする
 # (黙って通常ステップ・通常見出しとして扱わない。fail-loud 原則)。

@@ -75,6 +75,12 @@ vars:              # 変数の既定値(--var で上書き可)
 ### RB-DESCRIPTION
 メンテナンス前にサービスが正常稼働していることを確認する。
 
+### RB-LOCALDEF
+```yaml
+timeout: 300     # 秒。超過したらプロセスグループごと kill して NG 扱い
+cwd: /var/tmp    # 実行ディレクトリ
+```
+
 ### RB-CMD
 ```bash
 systemctl status {{TARGET_HOST}}-nginx.service
@@ -84,12 +90,6 @@ systemctl status {{TARGET_HOST}}-nginx.service
 ```
 rc == 0 and out("active \(running\)") and not out("ERROR|FATAL")
 ```
-
-### RB-LOCALDEF
-```yaml
-timeout: 300     # 秒。超過したらプロセスグループごと kill して NG 扱い
-cwd: /var/tmp    # 実行ディレクトリ
-```
 ````
 
 - **`## 見出し` 1つ = 1ステップ**(記載順に番号が付く)。見出しの `1.` は表示用の連番
@@ -98,11 +98,15 @@ cwd: /var/tmp    # 実行ディレクトリ
 
 | セクション | 意味 | 省略 |
 |---|---|---|
-| `### RB-CMD` | 実行するコマンド | 可(省略すると**手動ステップ**になる。後述) |
-| `### RB-EXPECTED` | 正常性基準(コマンドの合否判定式) | 可(省略時は `rc == 0`) |
 | `### RB-DESCRIPTION` | 作業者向けの説明 | 可(手動ステップでは必須) |
 | `### RB-LOCALDEF` | ステップ個別設定(timeout / cwd / ansible) | 可 |
+| `### RB-CMD` | 実行するコマンド | 可(省略すると**手動ステップ**になる。後述) |
+| `### RB-EXPECTED` | 正常性基準(コマンドの合否判定式) | 可(省略時は `rc == 0`) |
 | `### RB-ONFAIL` | 失敗して中断した瞬間に表示するガイダンス(自由記述) | 可 |
+
+  記載順は自由だが、上表の順(説明 → 実行先・実行条件 → コマンド → 判定 → 失敗時)を
+  推奨する。特に ansible 系ステップでは RB-LOCALDEF が先にあると、コマンドを読む前に
+  「どの inventory の・どの target に対する処理か」が分かる。
 
 - `### RB-CMD` のコードフェンスが複数ある場合は連結して 1 つの bash スクリプトとして実行される(下記参照)。
 - `{{VAR}}` はコマンドと正常性基準の中で置換される。未定義ならエラー。
@@ -273,7 +277,7 @@ cat "$WORKFILE"     # 同一プロセスなので前のフェンスの変数が�
 |---|---|
 | `# `(レベル1) | 手順書タイトル。ステップにはならない(共通設定に `title:` があればそちらが優先)。`# RB-ROLLBACK` はパースエラー(v0.5.0 で廃止) |
 | `## `(レベル2) | **ステップの開始**。見出しテキストがステップ名になり、番号は出現順に 1 から自動採番される(`--only` や `--from/--to` はこの番号を指す) |
-| `### `(レベル3) | ステップ内の区画。`RB-CMD` / `RB-EXPECTED` / `RB-DESCRIPTION` / `RB-LOCALDEF` / `RB-ONFAIL` の5種のみ有効で、それ以外の名前はパースエラー |
+| `### `(レベル3) | ステップ内の区画。`RB-DESCRIPTION` / `RB-LOCALDEF` / `RB-CMD` / `RB-EXPECTED` / `RB-ONFAIL` の5種のみ有効で、それ以外の名前はパースエラー |
 
 ### 見出しの連番(Markdownプレビュー用)
 
@@ -315,9 +319,9 @@ cat "$WORKFILE"     # 同一プロセスなので前のフェンスの変数が�
 順序が自由なもの:
 
 - 共通設定内のキー(`title` / `vars` / `ansible` / `secrets`)
-- ステップ内の `### RB-DESCRIPTION` / `### RB-CMD` / `### RB-EXPECTED` / `### RB-LOCALDEF` /
-  `### RB-ONFAIL`(順不同。読みやすさのため RB-DESCRIPTION → RB-CMD → RB-EXPECTED →
-  RB-LOCALDEF → RB-ONFAIL の順を推奨)
+- ステップ内の `### RB-DESCRIPTION` / `### RB-LOCALDEF` / `### RB-CMD` / `### RB-EXPECTED` /
+  `### RB-ONFAIL`(順不同。読みやすさのため RB-DESCRIPTION → RB-LOCALDEF → RB-CMD →
+  RB-EXPECTED → RB-ONFAIL の順を推奨)
 - `### RB-LOCALDEF` 内の YAML キー
 
 注意すべき境界挙動:
@@ -391,17 +395,17 @@ rc == 0 and out("CHANGED|SUCCESS") and not out("UNREACHABLE|FAILED")
 
 ## DBサーバの確認(RB-LOCALDEF スタイル)
 
-### RB-CMD
-```ansible
-df -h /var/lib/mysql
-```
-
 ### RB-LOCALDEF
 ```yaml
 ansible:
   inventory: inventories/db.ini  # このステップで使うインベントリ
   target: db01                   # ホストグループまたはホスト名
   extra_args: --become           # ansible コマンドに追加する引数(そのまま挿入)
+```
+
+### RB-CMD
+```ansible
+df -h /var/lib/mysql
 ```
 ````
 
@@ -450,15 +454,15 @@ df -h /var/lib/mysql
 ````markdown
 ## アプリのデプロイ
 
-### RB-CMD
-```playbook
--i inventories/web.ini playbooks/deploy.yml -e APP_VERSION=1.2.3
-```
-
 ### RB-LOCALDEF
 ```yaml
 ansible:
   target: webservers        # 指定すると -l(limit)で対象を絞る。省略可
+```
+
+### RB-CMD
+```playbook
+-i inventories/web.ini playbooks/deploy.yml -e APP_VERSION=1.2.3
 ```
 
 ### RB-EXPECTED

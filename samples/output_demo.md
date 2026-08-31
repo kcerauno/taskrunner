@@ -57,11 +57,6 @@ rc == 0 and out("demo start")
 記号の凡例はこのステップにだけ出て、後続では繰り返さない。
 出力の `web01 | CHANGED | rc=0 >>` というホスト区切り行が緑になる。
 
-### RB-CMD
-```ansible
-echo "{{CHECK_LABEL}}: host={{ inventory_hostname }}"
-```
-
 ### RB-LOCALDEF
 ```yaml
 ansible:
@@ -69,6 +64,11 @@ ansible:
   target: all
   host_matrix: true
 timeout: 120
+```
+
+### RB-CMD
+```ansible
+echo "{{CHECK_LABEL}}: host={{ inventory_hostname }}"
 ```
 
 ### RB-EXPECTED
@@ -84,16 +84,16 @@ not out("UNREACHABLE|FAILED")
 長い出力の中で区切りが分かる。`failed=0` の RECAP 行は色を付けない
 (`failed=1` 以上のときだけ赤くなる)。
 
-### RB-CMD
-```playbook
--i {{INVENTORY}} ./samples/local_test/show_var.yml -e HOGE=DEMO
-```
-
 ### RB-LOCALDEF
 ```yaml
 ansible:
   host_matrix: true
 timeout: 120
+```
+
+### RB-CMD
+```playbook
+-i {{INVENTORY}} ./samples/local_test/show_var.yml -e HOGE=DEMO
 ```
 
 ### RB-EXPECTED
@@ -109,11 +109,6 @@ db 系2ホストだけコマンドが失敗する。ホスト別結果に `X` �
 「一部ホストの失敗を想定内として次に進む」書き方の例でもあるので、
 基準式は rc=2(一部失敗)を許容している。凡例はここでは繰り返さない。
 
-### RB-CMD
-```ansible
-test -f /nonexistent-path-for-demo
-```
-
 ### RB-LOCALDEF
 ```yaml
 ansible:
@@ -121,6 +116,11 @@ ansible:
   target: dbservers
   host_matrix: true
 timeout: 120
+```
+
+### RB-CMD
+```ansible
+test -f /nonexistent-path-for-demo
 ```
 
 ### RB-EXPECTED

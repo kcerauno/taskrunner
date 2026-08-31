@@ -68,7 +68,7 @@ runbook は、従来 Excel で管理されていた作業手順書を **Markdown
 | 手順書 | runbook が実行する UTF-8 の Markdown ファイル |
 | 共通設定 | 手順書前書きの ` ```runbook ` フェンスに YAML で書く手順書全体の設定(title / vars / ansible / secrets) |
 | ステップ | `## ` 見出し 1 つに対応する実行単位。記載順に 1 から番号が付く |
-| セクション | ステップ内の `### RB-*` 見出しで区切られた要素(RB-DESCRIPTION / RB-CMD / RB-EXPECTED / RB-LOCALDEF / RB-ONFAIL) |
+| セクション | ステップ内の `### RB-*` 見出しで区切られた要素(RB-DESCRIPTION / RB-LOCALDEF / RB-CMD / RB-EXPECTED / RB-ONFAIL) |
 | ランナー | ステップの実行方式。`shell`(bash)/ `ansible`(ad-hoc, shell モジュール)/ `playbook`(ansible-playbook)/ `manual`(手動ステップ)の 4 種 |
 | 手動ステップ | RB-CMD を持たないステップ。コマンド実行の代わりに作業者の完了確認(`y` 入力)を待つ |
 | 正常性基準 | RB-EXPECTED に書く論理式。終了コード・標準出力・標準エラーから合否を判定する。省略時は `rc == 0` |

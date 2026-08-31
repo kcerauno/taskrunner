@@ -33,16 +33,16 @@ ansible を使わない手順書では ansible の設定は一切不要。
 フェンス1行目の「ansible ターゲット -i インベントリ」が起動指定として使われる。
 期待結果: 6ホスト全てが CHANGED、ホスト別結果マトリックスに O が6つ並ぶ。
 
-### RB-CMD
-```ansible
-ansible all -i samples/local_test/inventory.ini
-echo "{{CHECK_LABEL}}: host={{ inventory_hostname }}"
-```
-
 ### RB-LOCALDEF
 ```yaml
 ansible:
   host_matrix: true
+```
+
+### RB-CMD
+```ansible
+ansible all -i samples/local_test/inventory.ini
+echo "{{CHECK_LABEL}}: host={{ inventory_hostname }}"
 ```
 
 ### RB-EXPECTED
@@ -60,17 +60,17 @@ not out("UNREACHABLE|FAILED")
 行内指定の代わりに、ステップの RB-LOCALDEF で inventory / target を定義する書き方。
 期待結果: web系3ホストのみで実行される。
 
-### RB-CMD
-```ansible
-uptime
-```
-
 ### RB-LOCALDEF
 ```yaml
 ansible:
   inventory: samples/local_test/inventory_web.ini
   target: web
   host_matrix: true
+```
+
+### RB-CMD
+```ansible
+uptime
 ```
 
 ### RB-EXPECTED
@@ -86,15 +86,15 @@ not out("db01|db02|mon01") and not out("UNREACHABLE|FAILED")
 手順書変数 HOGE=FUGA は自動の -e JSON で渡るが、行内の -e HOGE=PIYO が優先される。
 期待結果: web系3ホストで実行され、出力が HOGE=PIYO になる(FUGA ではない)。
 
-### RB-CMD
-```playbook
--i samples/local_test/inventory_web.ini samples/local_test/show_var.yml -e HOGE=PIYO
-```
-
 ### RB-LOCALDEF
 ```yaml
 ansible:
   host_matrix: true
+```
+
+### RB-CMD
+```playbook
+-i samples/local_test/inventory_web.ini samples/local_test/show_var.yml -e HOGE=PIYO
 ```
 
 ### RB-EXPECTED
@@ -111,16 +111,16 @@ not out("failed=[1-9]|unreachable=[1-9]")
 期待結果: 1行目は web系3ホスト(HOGE=FUGA)、2行目は db系2ホスト(HOGE=DB_RUN)で実行され、
 マトリックスには両系統のホストがマージされて表示される。
 
-### RB-CMD
-```playbook
--i samples/local_test/inventory_web.ini samples/local_test/show_var.yml
--i samples/local_test/inventory_db.ini samples/local_test/show_var.yml -e HOGE=DB_RUN
-```
-
 ### RB-LOCALDEF
 ```yaml
 ansible:
   host_matrix: true
+```
+
+### RB-CMD
+```playbook
+-i samples/local_test/inventory_web.ini samples/local_test/show_var.yml
+-i samples/local_test/inventory_db.ini samples/local_test/show_var.yml -e HOGE=DB_RUN
 ```
 
 ### RB-EXPECTED
@@ -138,16 +138,16 @@ not out("failed=[1-9]|unreachable=[1-9]")
 2行目以降のリモートコマンドでは jinja2({{ HOGE }} や {{ inventory_hostname }})が使える。
 期待結果: db系2ホストのみで実行され、出力が HOGE=ADHOC になる。
 
-### RB-CMD
-```ansible
-ansible db -i samples/local_test/inventory_db.ini -e HOGE=ADHOC
-echo "HOGE={{ HOGE }} on {{ inventory_hostname }}"
-```
-
 ### RB-LOCALDEF
 ```yaml
 ansible:
   host_matrix: true
+```
+
+### RB-CMD
+```ansible
+ansible db -i samples/local_test/inventory_db.ini -e HOGE=ADHOC
+echo "HOGE={{ HOGE }} on {{ inventory_hostname }}"
 ```
 
 ### RB-EXPECTED

@@ -31,17 +31,17 @@ rc == 0 and out("CHANGED|SUCCESS") and not out("UNREACHABLE|FAILED")
 行内指定の代わりに、ステップの RB-LOCALDEF で inventory / target を指定する書き方。
 extra_args で任意のオプションも追加できる。
 
-### RB-CMD
-```ansible
-df -h
-```
-
 ### RB-LOCALDEF
 ```yaml
 ansible:
   inventory: "{{INVENTORY}}"
   target: db01
 timeout: 300
+```
+
+### RB-CMD
+```ansible
+df -h
 ```
 
 ### RB-EXPECTED
