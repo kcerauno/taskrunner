@@ -47,6 +47,7 @@ from .render import (
     print_tree_item,
     result_table,
     show_step_header,
+    target_signature,
     step_table,
 )
 
@@ -376,13 +377,16 @@ def cmd_run(args: argparse.Namespace) -> int:
     exit_code = 0
     aborted_at: int | None = None  # 中断が起きたステップ番号(案R1 の一覧で「← 中断」を出す)
     legend_shown = False  # 案R3: ホスト別結果の凡例は最初の1回だけ出す
+    prev_signature = None  # 直前に実行した ansible 系ステップの実行先(「対象」行の変更マーク用)
     try:
         for step in steps:
             rec = StepRecord(step.number, step.title, step.command, step.criteria)
             if step.number not in selected:
                 continue
             aborted_at = step.number  # 中断された場合はこのステップ位置(正常終了時は最後にクリアする)
-            show_step_header(step, total, mask)
+            show_step_header(step, total, mask, prev_signature=prev_signature)
+            if target_signature(step) is not None:
+                prev_signature = target_signature(step)
             art.log(f"--- ステップ {step.number}: {step.title} ---")
 
             # 提案A: 手動ステップ(RB-CMD なし)。説明を表示して作業者の完了確認を待つ
@@ -608,8 +612,12 @@ def cmd_list(args: argparse.Namespace) -> int:
     # 一覧表はコマンドを持たないので、全文を見たいときは詳細ブロックを出す
     # (check --preview の第2部と同じ表示部品を使う)
     if args.detail:
+        prev_signature = None
         for s in proc.steps:
-            show_step_header(s, len(proc.steps), mask, preview=True)
+            show_step_header(s, len(proc.steps), mask, preview=True,
+                             prev_signature=prev_signature)
+            if target_signature(s) is not None:
+                prev_signature = target_signature(s)
     return 0
 
 
@@ -752,8 +760,12 @@ def cmd_check(args: argparse.Namespace) -> int:
         mask = make_mask(proc)
         console.print()
         console.print(step_table(f"{proc.title} ({proc.path})", proc.steps, mask))
+        prev_signature = None
         for s in proc.steps:
-            show_step_header(s, len(proc.steps), mask, preview=True)
+            show_step_header(s, len(proc.steps), mask, preview=True,
+                             prev_signature=prev_signature)
+            if target_signature(s) is not None:
+                prev_signature = target_signature(s)
     return 0
 
 

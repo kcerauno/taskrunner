@@ -14,7 +14,7 @@
 | [03_criteria.md](03_criteria.md) | 正常性基準式(RB-EXPECTED)の言語仕様と評価規則 |
 | [04_cli.md](04_cli.md) | CLI 仕様(サブコマンド・オプション・対話フロー・終了コード) |
 | [05_execution_logging.md](05_execution_logging.md) | 実行モデル(コマンド実行・判定・中断・マスキング)とログ成果物の仕様 |
-| [06_examples.md](06_examples.md) | 実際の実行出力例(採取日 2026-07-18) |
+| [06_examples.md](06_examples.md) | 実際の実行出力例(採取日 2026-08-31) |
 
 ## 仕様の優先順位
 

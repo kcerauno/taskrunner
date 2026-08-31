@@ -1,12 +1,12 @@
 # 06. 実行例集
 
-本書は runbook **v0.5.0** の実際の実行出力を採取したもの(採取日 2026-07-30)。
+本書は runbook **v0.5.0** の実際の実行出力を採取したもの(採取日 2026-08-31)。
 
 採取環境:
 
 - 作業ディレクトリ: `/home/practi/wk_tool`
 - runbook バイナリ: `.venv/bin/runbook`(バージョン 0.5.0)
-- OS: Linux practicus 6.8.0-136-generic
+- OS: Linux practicus 6.8.0-138-generic
 - 端末幅: `COLUMNS=100`(表の折り返し位置は端末幅に依存する)
 
 以降のコマンド例で `<LOGDIR>` はログ出力先の一時ディレクトリ、
@@ -89,7 +89,7 @@ $ .venv/bin/runbook check --help
 ```
 
 ```
-usage: runbook check [-h] [--var KEY=VALUE] [--preview] file
+usage: runbook check [-h] [--var KEY=VALUE] [--json] [--preview] file
 
 positional arguments:
   file             手順書 Markdown ファイル
@@ -97,6 +97,7 @@ positional arguments:
 options:
   -h, --help       show this help message and exit
   --var KEY=VALUE  変数の指定/上書き(複数可)
+  --json           検証結果を行番号付きの JSON で出力する(エディタ統合用)
   --preview        変数展開・ansibleコマンド組み立て後の実行コマンドを全文表示する
 exit=0
 ```
@@ -151,13 +152,13 @@ $ .venv/bin/python -m pytest tests/ -q
 終了コード: 0
 
 ```
-........................................................................ [ 40%]
-........................................................................ [ 81%]
-................................                                         [100%]
-176 passed in 4.40s
+............................................................................................ [ 47%]
+............................................................................................ [ 95%]
+........                                                                                     [100%]
+192 passed in 6.95s
 ```
 
-176 件全てパス、失敗・エラーなし。
+192 件全てパス、失敗・エラーなし。
 
 ---
 
@@ -242,7 +243,8 @@ $ .venv/bin/runbook list --detail samples/local_test/feature_test.md
 ・ ステップ 1/6: ad-hoc: 行内指定で全6ホストの疎通確認
   ├ 説明: フェンス1行目の「ansible ターゲット -i インベントリ」が起動指定として使われる。
   │   期待結果: 6ホスト全てが CHANGED、ホスト別結果マトリックスに O が6つ並ぶ。
-  ├ コマンド (ansible ad-hoc / shellモジュール):
+  ├ 対象: all @ samples/local_test/inventory.ini (最初の実行対象)
+  ├ コマンド (ansible ad-hoc / shellモジュール)
   │   $ echo "{{CHECK_LABEL}}: host={{ inventory_hostname }}"
   ├ 実行コマンド: ansible -e '{"CHECK_LABEL": "機能テスト", "HOGE": "FUGA"}' all -i samples/local_test/inventory.ini -m shell -a 'echo "{{CHECK_LABEL}}: host={{ inventory_hostname }}"'
   ├ 正常性基準: rc == 0 and
@@ -254,7 +256,8 @@ $ .venv/bin/runbook list --detail samples/local_test/feature_test.md
 ・ ステップ 2/6: ad-hoc: RB-LOCALDEF で定義するスタイル
   ├ 説明: 行内指定の代わりに、ステップの RB-LOCALDEF で inventory / target を定義する書き方。
   │   期待結果: web系3ホストのみで実行される。
-  ├ コマンド (ansible ad-hoc / shellモジュール):
+  ├ 対象: web @ samples/local_test/inventory_web.ini ⇄ 前ステップから変更
+  ├ コマンド (ansible ad-hoc / shellモジュール)
   │   $ uptime
   ├ 実行コマンド: ansible web -i samples/local_test/inventory_web.ini -e '{"CHECK_LABEL": "機能テスト", "HOGE": "FUGA"}' -m shell -a uptime
   ├ 正常性基準: rc == 0 and out("web01") and out("web02") and out("web03") and
@@ -275,7 +278,8 @@ $ .venv/bin/runbook check --preview samples/local_test/feature_test.md
   ├ 説明: 起動指定行に -e HOGE=ADHOC を書くと、自動付与の手順書変数(HOGE=FUGA)より優先される。
   │   2行目以降のリモートコマンドでは jinja2({{ HOGE }} や {{ inventory_hostname }})が使える。
   │   期待結果: db系2ホストのみで実行され、出力が HOGE=ADHOC になる。
-  ├ コマンド (ansible ad-hoc / shellモジュール):
+  ├ 対象: db @ samples/local_test/inventory_db.ini ⇄ 前ステップから変更
+  ├ コマンド (ansible ad-hoc / shellモジュール)
   │   $ echo "HOGE={{ HOGE }} on {{ inventory_hostname }}"
   ├ 実行コマンド: ansible -e '{"CHECK_LABEL": "機能テスト", "HOGE": "FUGA"}' db -i samples/local_test/inventory_db.ini -e HOGE=ADHOC -m shell -a 'echo "HOGE={{ HOGE }} on {{ inventory_hostname }}"'
   ├ 正常性基準: rc == 0 and
@@ -286,7 +290,7 @@ $ .venv/bin/runbook check --preview samples/local_test/feature_test.md
 ・ ステップ 6/6: bash: ローカルステップとの混在確認
   ├ 説明: 同じ手順書内に bash ステップも混在できることの確認。ansible の設定は一切不要。
   │   期待結果: OK。このステップは ansible ではないためホスト別結果は表示されない。
-  ├ コマンド:
+  ├ コマンド (bash)
   │   $ echo "local step on $(hostname)"
   │   $ uname -a
   ├ 正常性基準: rc == 0 and "local step on" in stdout and out("Linux")
@@ -328,12 +332,13 @@ $ .venv/bin/runbook run samples/local_test/feature_test.md --yes --operator 仕�
 
 ・ 実行開始: 機能テスト手順(共通設定なし・全ステップ個別定義スタイル)
   ├ 作業者: 仕様採取 / 確認者: 確認者
-  └ ログ保存先: <LOGDIR>/feature_test_20260730_224157
+  └ ログ保存先: <LOGDIR>/feature_test_20260831_170702
 
 ・ ステップ 1/6: ad-hoc: 行内指定で全6ホストの疎通確認
   ├ 説明: フェンス1行目の「ansible ターゲット -i インベントリ」が起動指定として使われる。
   │   期待結果: 6ホスト全てが CHANGED、ホスト別結果マトリックスに O が6つ並ぶ。
-  ├ コマンド (ansible ad-hoc / shellモジュール):
+  ├ 対象: all @ samples/local_test/inventory.ini (最初の実行対象)
+  ├ コマンド (ansible ad-hoc / shellモジュール)
   │   $ echo "{{CHECK_LABEL}}: host={{ inventory_hostname }}"
   ├ 実行コマンド: ansible -e '{"CHECK_LABEL": "機能テスト", "HOGE": "FUGA"}' all -i samples/local_test/inventory.ini -m shell -a 'echo "{{CHECK_LABEL}}: host={{ inventory_hostname }}"'
   ├ 正常性基準: rc == 0 and
@@ -341,51 +346,53 @@ $ .venv/bin/runbook run samples/local_test/feature_test.md --yes --operator 仕�
   │   out("機能テスト: host=web03") and out("機能テスト: host=db01") and
   │   out("機能テスト: host=db02") and out("機能テスト: host=mon01") and
   │   not out("UNREACHABLE|FAILED")
-  ├ 開始: 2026-07-30 22:41:57
+  ├ 開始: 2026-08-31 17:07:02
   │   web02 | CHANGED | rc=0 >>
   │   機能テスト: host=web02
-  │   db02 | CHANGED | rc=0 >>
-  │   機能テスト: host=db02
-  │   db01 | CHANGED | rc=0 >>
-  │   機能テスト: host=db01
   │   web03 | CHANGED | rc=0 >>
   │   機能テスト: host=web03
+  │   db01 | CHANGED | rc=0 >>
+  │   機能テスト: host=db01
   │   web01 | CHANGED | rc=0 >>
   │   機能テスト: host=web01
+  │   db02 | CHANGED | rc=0 >>
+  │   機能テスト: host=db02
   │   mon01 | CHANGED | rc=0 >>
   │   機能テスト: host=mon01
   ├ ホスト別結果: db01=O db02=O mon01=O web01=O web02=O web03=O
   │   O=成功  X=失敗  !=到達不能  -=対象外
-  └ 結果: ✓ Completed (rc=0, 1.125s, 終了 22:41:58)
+  └ 結果: ✓ Completed (rc=0, 1.071s, 終了 17:07:03)
 
 ・ ステップ 2/6: ad-hoc: RB-LOCALDEF で定義するスタイル
   ├ 説明: 行内指定の代わりに、ステップの RB-LOCALDEF で inventory / target を定義する書き方。
   │   期待結果: web系3ホストのみで実行される。
-  ├ コマンド (ansible ad-hoc / shellモジュール):
+  ├ 対象: web @ samples/local_test/inventory_web.ini ⇄ 前ステップから変更
+  ├ コマンド (ansible ad-hoc / shellモジュール)
   │   $ uptime
   ├ 実行コマンド: ansible web -i samples/local_test/inventory_web.ini -e '{"CHECK_LABEL": "機能テスト", "HOGE": "FUGA"}' -m shell -a uptime
   ├ 正常性基準: rc == 0 and out("web01") and out("web02") and out("web03") and
   │   not out("db01|db02|mon01") and not out("UNREACHABLE|FAILED")
-  ├ 開始: 2026-07-30 22:41:58
-  │   web02 | CHANGED | rc=0 >>
-  │    22:41:59 up  6:08,  1 user,  load average: 0.54, 0.45, 0.55
-  │   web01 | CHANGED | rc=0 >>
-  │    22:41:59 up  6:08,  1 user,  load average: 0.54, 0.45, 0.55
+  ├ 開始: 2026-08-31 17:07:03
   │   web03 | CHANGED | rc=0 >>
-  │    22:41:59 up  6:08,  1 user,  load average: 0.54, 0.45, 0.55
+  │    17:07:04 up 56 min,  1 user,  load average: 1.22, 1.09, 1.00
+  │   web01 | CHANGED | rc=0 >>
+  │    17:07:04 up 56 min,  1 user,  load average: 1.22, 1.09, 1.00
+  │   web02 | CHANGED | rc=0 >>
+  │    17:07:04 up 56 min,  1 user,  load average: 1.22, 1.09, 1.00
   ├ ホスト別結果: web01=O web02=O web03=O
-  └ 結果: ✓ Completed (rc=0, 0.851s, 終了 22:41:59)
+  └ 結果: ✓ Completed (rc=0, 0.824s, 終了 17:07:04)
 
 ・ ステップ 3/6: playbook: 行内 -i と -e(実行時上書き)
   ├ 説明: プレイブック行に -i(インベントリ)と -e(実行時に変えたい値)を直接書く。
   │   手順書変数 HOGE=FUGA は自動の -e JSON で渡るが、行内の -e HOGE=PIYO が優先される。
   │   期待結果: web系3ホストで実行され、出力が HOGE=PIYO になる(FUGA ではない)。
-  ├ プレイブック (ansible-playbook):
+  ├ 対象: (プレイブックの hosts:) @ samples/local_test/inventory_web.ini ⇄ 前ステップから変更
+  ├ プレイブック (ansible-playbook)
   │   -i samples/local_test/inventory_web.ini samples/local_test/show_var.yml -e HOGE=PIYO
   ├ 実行コマンド: ansible-playbook -e '{"CHECK_LABEL": "機能テスト", "HOGE": "FUGA"}' -i samples/local_test/inventory_web.ini samples/local_test/show_var.yml -e HOGE=PIYO
   ├ 正常性基準: rc == 0 and out("HOGE=PIYO") and not out("HOGE=FUGA") and
   │   not out("failed=[1-9]|unreachable=[1-9]")
-  ├ 開始: 2026-07-30 22:41:59
+  ├ 開始: 2026-08-31 17:07:04
   │   
   │   PLAY [変数表示プレイ] **********************************************************
   │   
@@ -406,14 +413,15 @@ $ .venv/bin/runbook run samples/local_test/feature_test.md --yes --operator 仕�
   │   web03                      : ok=1    changed=0    unreachable=0    failed=0    skipped=0    rescued=0    ignored=0   
   │   
   ├ ホスト別結果: web01=O web02=O web03=O
-  └ 結果: ✓ Completed (rc=0, 0.537s, 終了 22:42:00)
+  └ 結果: ✓ Completed (rc=0, 0.54s, 終了 17:07:05)
 
 ・ ステップ 4/6: playbook: 行ごとのインベントリ切替
   ├ 説明: 処理系統ごとにインベントリを分ける運用の確認。行ごとに -i を書き分ける。
   │   2行は && 連結で順に実行され、1行目が失敗したら2行目は実行されない。
   │   期待結果: 1行目は web系3ホスト(HOGE=FUGA)、2行目は db系2ホスト(HOGE=DB_RUN)で実行され、
   │   マトリックスには両系統のホストがマージされて表示される。
-  ├ プレイブック (ansible-playbook):
+  ├ 対象: (プレイブックの hosts:) @ samples/local_test/inventory_web.ini, samples/local_test/inventory_db.ini ⇄ 前ステップから変更
+  ├ プレイブック (ansible-playbook)
   │   -i samples/local_test/inventory_web.ini samples/local_test/show_var.yml
   │   -i samples/local_test/inventory_db.ini samples/local_test/show_var.yml -e HOGE=DB_RUN
   ├ 実行コマンド: ansible-playbook -e '{"CHECK_LABEL": "機能テスト", "HOGE": "FUGA"}' -i samples/local_test/inventory_web.ini samples/local_test/show_var.yml && ansible-playbook -e '{"CHECK_LABEL": "機能テスト", "HOGE": "FUGA"}' -i samples/local_test/inventory_db.ini samples/local_test/show_var.yml -e HOGE=DB_RUN
@@ -421,7 +429,7 @@ $ .venv/bin/runbook run samples/local_test/feature_test.md --yes --operator 仕�
   │   out("HOGE=FUGA \(host=web01\)") and out("HOGE=FUGA \(host=web03\)") and
   │   out("HOGE=DB_RUN \(host=db01\)") and out("HOGE=DB_RUN \(host=db02\)") and
   │   not out("failed=[1-9]|unreachable=[1-9]")
-  ├ 開始: 2026-07-30 22:42:00
+  ├ 開始: 2026-08-31 17:07:05
   │   
   │   PLAY [変数表示プレイ] **********************************************************
   │   
@@ -457,38 +465,39 @@ $ .venv/bin/runbook run samples/local_test/feature_test.md --yes --operator 仕�
   │   db02                       : ok=1    changed=0    unreachable=0    failed=0    skipped=0    rescued=0    ignored=0   
   │   
   ├ ホスト別結果: db01=O db02=O web01=O web02=O web03=O
-  └ 結果: ✓ Completed (rc=0, 1.091s, 終了 22:42:01)
+  └ 結果: ✓ Completed (rc=0, 1.072s, 終了 17:07:06)
 
 ・ ステップ 5/6: ad-hoc: 行内指定 + 行内 -e の優先確認
   ├ 説明: 起動指定行に -e HOGE=ADHOC を書くと、自動付与の手順書変数(HOGE=FUGA)より優先される。
   │   2行目以降のリモートコマンドでは jinja2({{ HOGE }} や {{ inventory_hostname }})が使える。
   │   期待結果: db系2ホストのみで実行され、出力が HOGE=ADHOC になる。
-  ├ コマンド (ansible ad-hoc / shellモジュール):
+  ├ 対象: db @ samples/local_test/inventory_db.ini ⇄ 前ステップから変更
+  ├ コマンド (ansible ad-hoc / shellモジュール)
   │   $ echo "HOGE={{ HOGE }} on {{ inventory_hostname }}"
   ├ 実行コマンド: ansible -e '{"CHECK_LABEL": "機能テスト", "HOGE": "FUGA"}' db -i samples/local_test/inventory_db.ini -e HOGE=ADHOC -m shell -a 'echo "HOGE={{ HOGE }} on {{ inventory_hostname }}"'
   ├ 正常性基準: rc == 0 and
   │   out("HOGE=ADHOC on db01") and out("HOGE=ADHOC on db02") and
   │   not out("HOGE=FUGA") and not out("web01|web02|web03|mon01") and
   │   not out("UNREACHABLE|FAILED")
-  ├ 開始: 2026-07-30 22:42:01
-  │   db02 | CHANGED | rc=0 >>
-  │   HOGE=ADHOC on db02
+  ├ 開始: 2026-08-31 17:07:06
   │   db01 | CHANGED | rc=0 >>
   │   HOGE=ADHOC on db01
+  │   db02 | CHANGED | rc=0 >>
+  │   HOGE=ADHOC on db02
   ├ ホスト別結果: db01=O db02=O
-  └ 結果: ✓ Completed (rc=0, 0.847s, 終了 22:42:02)
+  └ 結果: ✓ Completed (rc=0, 0.837s, 終了 17:07:06)
 
 ・ ステップ 6/6: bash: ローカルステップとの混在確認
   ├ 説明: 同じ手順書内に bash ステップも混在できることの確認。ansible の設定は一切不要。
   │   期待結果: OK。このステップは ansible ではないためホスト別結果は表示されない。
-  ├ コマンド:
+  ├ コマンド (bash)
   │   $ echo "local step on $(hostname)"
   │   $ uname -a
   ├ 正常性基準: rc == 0 and "local step on" in stdout and out("Linux")
-  ├ 開始: 2026-07-30 22:42:02
+  ├ 開始: 2026-08-31 17:07:06
   │   local step on practicus
-  │   Linux practicus 6.8.0-136-generic #136-Ubuntu SMP PREEMPT_DYNAMIC Wed Jul  1 21:53:05 UTC 2026 x86_64 x86_64 x86_64 GNU/Linux
-  └ 結果: ✓ Completed (rc=0, 0.005s, 終了 22:42:02)
+  │   Linux practicus 6.8.0-138-generic #138-Ubuntu SMP PREEMPT_DYNAMIC Fri Jul 31 22:41:49 UTC 2026 x86_64 x86_64 x86_64 GNU/Linux
+  └ 結果: ✓ Completed (rc=0, 0.005s, 終了 17:07:06)
 
 ・ 最終ホスト別結果マトリックス
   ステップ                                    db01   db02   mon01   web01   web02   web03
@@ -503,20 +512,20 @@ $ .venv/bin/runbook run samples/local_test/feature_test.md --yes --operator 仕�
 ・ 実行結果: 全ステップ正常終了
 No.   ステップ                                 結果     rc     所要   
 ──────────────────────────────────────────────────────────────────────
-  1   ad-hoc: 行内指定で全6ホストの疎通確認    ✓ 完了    0   1.125s   
-  2   ad-hoc: RB-LOCALDEF で定義するスタイル   ✓ 完了    0   0.851s   
-  3   playbook: 行内 -i と -e(実行時上書き)    ✓ 完了    0   0.537s   
-  4   playbook: 行ごとのインベントリ切替       ✓ 完了    0   1.091s   
-  5   ad-hoc: 行内指定 + 行内 -e の優先確認    ✓ 完了    0   0.847s   
+  1   ad-hoc: 行内指定で全6ホストの疎通確認    ✓ 完了    0   1.071s   
+  2   ad-hoc: RB-LOCALDEF で定義するスタイル   ✓ 完了    0   0.824s   
+  3   playbook: 行内 -i と -e(実行時上書き)    ✓ 完了    0    0.54s   
+  4   playbook: 行ごとのインベントリ切替       ✓ 完了    0   1.072s   
+  5   ad-hoc: 行内指定 + 行内 -e の優先確認    ✓ 完了    0   0.837s   
   6   bash: ローカルステップとの混在確認       ✓ 完了    0   0.005s   
-  └ ログ保存先: <LOGDIR>/feature_test_20260730_224157
+  └ ログ保存先: <LOGDIR>/feature_test_20260831_170702
 exit=0
 ```
 
 ### 4.1 生成されるログディレクトリの構成
 
 ```
-<LOGDIR>/feature_test_20260730_224157/
+<LOGDIR>/feature_test_20260831_170702/
   env_overlay.sh
   result.json
   run.log
@@ -540,40 +549,40 @@ exit=0
 ### 4.2 `run.log` 全文
 
 ```
-[2026-07-30 22:41:57] 手順書「機能テスト手順(共通設定なし・全ステップ個別定義スタイル)」実行開始 (samples/local_test/feature_test.md)
-[2026-07-30 22:41:57] 作業者: 仕様採取  確認者: 確認者
-[2026-07-30 22:41:57] 対象ステップ: [1, 2, 3, 4, 5, 6]
-[2026-07-30 22:41:57] --- ステップ 1: ad-hoc: 行内指定で全6ホストの疎通確認 ---
-[2026-07-30 22:41:57] コマンド: ansible -e '{"CHECK_LABEL": "機能テスト", "HOGE": "FUGA"}' all -i samples/local_test/inventory.ini -m shell -a 'echo "{{CHECK_LABEL}}: host={{ inventory_hostname }}"'
-[2026-07-30 22:41:58] 終了コード: 0  所要時間: 1.125s
-[2026-07-30 22:41:58] ホスト別結果: db01=O db02=O mon01=O web01=O web02=O web03=O
-[2026-07-30 22:41:58] 判定: OK
-[2026-07-30 22:41:58] --- ステップ 2: ad-hoc: RB-LOCALDEF で定義するスタイル ---
-[2026-07-30 22:41:58] コマンド: ansible web -i samples/local_test/inventory_web.ini -e '{"CHECK_LABEL": "機能テスト", "HOGE": "FUGA"}' -m shell -a uptime
-[2026-07-30 22:41:59] 終了コード: 0  所要時間: 0.851s
-[2026-07-30 22:41:59] ホスト別結果: web01=O web02=O web03=O
-[2026-07-30 22:41:59] 判定: OK
-[2026-07-30 22:41:59] --- ステップ 3: playbook: 行内 -i と -e(実行時上書き) ---
-[2026-07-30 22:41:59] コマンド: ansible-playbook -e '{"CHECK_LABEL": "機能テスト", "HOGE": "FUGA"}' -i samples/local_test/inventory_web.ini samples/local_test/show_var.yml -e HOGE=PIYO
-[2026-07-30 22:42:00] 終了コード: 0  所要時間: 0.537s
-[2026-07-30 22:42:00] ホスト別結果: web01=O web02=O web03=O
-[2026-07-30 22:42:00] 判定: OK
-[2026-07-30 22:42:00] --- ステップ 4: playbook: 行ごとのインベントリ切替 ---
-[2026-07-30 22:42:00] コマンド: ansible-playbook -e '{"CHECK_LABEL": "機能テスト", "HOGE": "FUGA"}' -i samples/local_test/inventory_web.ini samples/local_test/show_var.yml && ansible-playbook -e '{"CHECK_LABEL": "機能テスト", "HOGE": "FUGA"}' -i samples/local_test/inventory_db.ini samples/local_test/show_var.yml -e HOGE=DB_RUN
-[2026-07-30 22:42:01] 終了コード: 0  所要時間: 1.091s
-[2026-07-30 22:42:01] ホスト別結果: db01=O db02=O web01=O web02=O web03=O
-[2026-07-30 22:42:01] 判定: OK
-[2026-07-30 22:42:01] --- ステップ 5: ad-hoc: 行内指定 + 行内 -e の優先確認 ---
-[2026-07-30 22:42:01] コマンド: ansible -e '{"CHECK_LABEL": "機能テスト", "HOGE": "FUGA"}' db -i samples/local_test/inventory_db.ini -e HOGE=ADHOC -m shell -a 'echo "HOGE={{ HOGE }} on {{ inventory_hostname }}"'
-[2026-07-30 22:42:02] 終了コード: 0  所要時間: 0.847s
-[2026-07-30 22:42:02] ホスト別結果: db01=O db02=O
-[2026-07-30 22:42:02] 判定: OK
-[2026-07-30 22:42:02] --- ステップ 6: bash: ローカルステップとの混在確認 ---
-[2026-07-30 22:42:02] コマンド: echo "local step on $(hostname)"
-[2026-07-30 22:42:02] uname -a
-[2026-07-30 22:42:02] 終了コード: 0  所要時間: 0.005s
-[2026-07-30 22:42:02] 判定: OK
-[2026-07-30 22:42:02] 実行終了: completed
+[2026-08-31 17:07:02] 手順書「機能テスト手順(共通設定なし・全ステップ個別定義スタイル)」実行開始 (samples/local_test/feature_test.md)
+[2026-08-31 17:07:02] 作業者: 仕様採取  確認者: 確認者
+[2026-08-31 17:07:02] 対象ステップ: [1, 2, 3, 4, 5, 6]
+[2026-08-31 17:07:02] --- ステップ 1: ad-hoc: 行内指定で全6ホストの疎通確認 ---
+[2026-08-31 17:07:02] コマンド: ansible -e '{"CHECK_LABEL": "機能テスト", "HOGE": "FUGA"}' all -i samples/local_test/inventory.ini -m shell -a 'echo "{{CHECK_LABEL}}: host={{ inventory_hostname }}"'
+[2026-08-31 17:07:03] 終了コード: 0  所要時間: 1.071s
+[2026-08-31 17:07:03] ホスト別結果: db01=O db02=O mon01=O web01=O web02=O web03=O
+[2026-08-31 17:07:03] 判定: OK
+[2026-08-31 17:07:03] --- ステップ 2: ad-hoc: RB-LOCALDEF で定義するスタイル ---
+[2026-08-31 17:07:03] コマンド: ansible web -i samples/local_test/inventory_web.ini -e '{"CHECK_LABEL": "機能テスト", "HOGE": "FUGA"}' -m shell -a uptime
+[2026-08-31 17:07:04] 終了コード: 0  所要時間: 0.824s
+[2026-08-31 17:07:04] ホスト別結果: web01=O web02=O web03=O
+[2026-08-31 17:07:04] 判定: OK
+[2026-08-31 17:07:04] --- ステップ 3: playbook: 行内 -i と -e(実行時上書き) ---
+[2026-08-31 17:07:04] コマンド: ansible-playbook -e '{"CHECK_LABEL": "機能テスト", "HOGE": "FUGA"}' -i samples/local_test/inventory_web.ini samples/local_test/show_var.yml -e HOGE=PIYO
+[2026-08-31 17:07:05] 終了コード: 0  所要時間: 0.54s
+[2026-08-31 17:07:05] ホスト別結果: web01=O web02=O web03=O
+[2026-08-31 17:07:05] 判定: OK
+[2026-08-31 17:07:05] --- ステップ 4: playbook: 行ごとのインベントリ切替 ---
+[2026-08-31 17:07:05] コマンド: ansible-playbook -e '{"CHECK_LABEL": "機能テスト", "HOGE": "FUGA"}' -i samples/local_test/inventory_web.ini samples/local_test/show_var.yml && ansible-playbook -e '{"CHECK_LABEL": "機能テスト", "HOGE": "FUGA"}' -i samples/local_test/inventory_db.ini samples/local_test/show_var.yml -e HOGE=DB_RUN
+[2026-08-31 17:07:06] 終了コード: 0  所要時間: 1.072s
+[2026-08-31 17:07:06] ホスト別結果: db01=O db02=O web01=O web02=O web03=O
+[2026-08-31 17:07:06] 判定: OK
+[2026-08-31 17:07:06] --- ステップ 5: ad-hoc: 行内指定 + 行内 -e の優先確認 ---
+[2026-08-31 17:07:06] コマンド: ansible -e '{"CHECK_LABEL": "機能テスト", "HOGE": "FUGA"}' db -i samples/local_test/inventory_db.ini -e HOGE=ADHOC -m shell -a 'echo "HOGE={{ HOGE }} on {{ inventory_hostname }}"'
+[2026-08-31 17:07:06] 終了コード: 0  所要時間: 0.837s
+[2026-08-31 17:07:06] ホスト別結果: db01=O db02=O
+[2026-08-31 17:07:06] 判定: OK
+[2026-08-31 17:07:06] --- ステップ 6: bash: ローカルステップとの混在確認 ---
+[2026-08-31 17:07:06] コマンド: echo "local step on $(hostname)"
+[2026-08-31 17:07:06] uname -a
+[2026-08-31 17:07:06] 終了コード: 0  所要時間: 0.005s
+[2026-08-31 17:07:06] 判定: OK
+[2026-08-31 17:07:06] 実行終了: completed
 ```
 
 ### 4.3 `result.json` 全文
@@ -601,8 +610,8 @@ exit=0
     "secrets": []
   },
   "status": "completed",
-  "started_at": "2026-07-30T22:41:57",
-  "finished_at": "2026-07-30T22:42:02",
+  "started_at": "2026-08-31T17:07:02",
+  "finished_at": "2026-08-31T17:07:06",
   "steps": [
     {
       "number": 1,
@@ -611,16 +620,16 @@ exit=0
       "criteria": "rc == 0 and\nout(\"機能テスト: host=web01\") and out(\"機能テスト: host=web02\") and\nout(\"機能テスト: host=web03\") and out(\"機能テスト: host=db01\") and\nout(\"機能テスト: host=db02\") and out(\"機能テスト: host=mon01\") and\nnot out(\"UNREACHABLE|FAILED\")",
       "status": "ok",
       "rc": 0,
-      "duration": 1.125,
-      "started_at": "2026-07-30T22:41:57",
-      "finished_at": "2026-07-30T22:41:58",
+      "duration": 1.071,
+      "started_at": "2026-08-31T17:07:02",
+      "finished_at": "2026-08-31T17:07:03",
       "detail": "",
       "host_results": {
         "web02": "ok",
-        "db02": "ok",
-        "db01": "ok",
         "web03": "ok",
+        "db01": "ok",
         "web01": "ok",
+        "db02": "ok",
         "mon01": "ok"
       },
       "host_matrix": true,
@@ -633,14 +642,14 @@ exit=0
       "criteria": "rc == 0 and out(\"web01\") and out(\"web02\") and out(\"web03\") and\nnot out(\"db01|db02|mon01\") and not out(\"UNREACHABLE|FAILED\")",
       "status": "ok",
       "rc": 0,
-      "duration": 0.851,
-      "started_at": "2026-07-30T22:41:58",
-      "finished_at": "2026-07-30T22:41:59",
+      "duration": 0.824,
+      "started_at": "2026-08-31T17:07:03",
+      "finished_at": "2026-08-31T17:07:04",
       "detail": "",
       "host_results": {
-        "web02": "ok",
+        "web03": "ok",
         "web01": "ok",
-        "web03": "ok"
+        "web02": "ok"
       },
       "host_matrix": true,
       "criteria_breakdown": []
@@ -652,9 +661,9 @@ exit=0
       "criteria": "rc == 0 and out(\"HOGE=PIYO\") and not out(\"HOGE=FUGA\") and\nnot out(\"failed=[1-9]|unreachable=[1-9]\")",
       "status": "ok",
       "rc": 0,
-      "duration": 0.537,
-      "started_at": "2026-07-30T22:41:59",
-      "finished_at": "2026-07-30T22:42:00",
+      "duration": 0.54,
+      "started_at": "2026-08-31T17:07:04",
+      "finished_at": "2026-08-31T17:07:05",
       "detail": "",
       "host_results": {
         "web01": "ok",
@@ -671,9 +680,9 @@ exit=0
       "criteria": "rc == 0 and\nout(\"HOGE=FUGA \\(host=web01\\)\") and out(\"HOGE=FUGA \\(host=web03\\)\") and\nout(\"HOGE=DB_RUN \\(host=db01\\)\") and out(\"HOGE=DB_RUN \\(host=db02\\)\") and\nnot out(\"failed=[1-9]|unreachable=[1-9]\")",
       "status": "ok",
       "rc": 0,
-      "duration": 1.091,
-      "started_at": "2026-07-30T22:42:00",
-      "finished_at": "2026-07-30T22:42:01",
+      "duration": 1.072,
+      "started_at": "2026-08-31T17:07:05",
+      "finished_at": "2026-08-31T17:07:06",
       "detail": "",
       "host_results": {
         "web01": "ok",
@@ -692,13 +701,13 @@ exit=0
       "criteria": "rc == 0 and\nout(\"HOGE=ADHOC on db01\") and out(\"HOGE=ADHOC on db02\") and\nnot out(\"HOGE=FUGA\") and not out(\"web01|web02|web03|mon01\") and\nnot out(\"UNREACHABLE|FAILED\")",
       "status": "ok",
       "rc": 0,
-      "duration": 0.847,
-      "started_at": "2026-07-30T22:42:01",
-      "finished_at": "2026-07-30T22:42:02",
+      "duration": 0.837,
+      "started_at": "2026-08-31T17:07:06",
+      "finished_at": "2026-08-31T17:07:06",
       "detail": "",
       "host_results": {
-        "db02": "ok",
-        "db01": "ok"
+        "db01": "ok",
+        "db02": "ok"
       },
       "host_matrix": true,
       "criteria_breakdown": []
@@ -711,8 +720,8 @@ exit=0
       "status": "ok",
       "rc": 0,
       "duration": 0.005,
-      "started_at": "2026-07-30T22:42:02",
-      "finished_at": "2026-07-30T22:42:02",
+      "started_at": "2026-08-31T17:07:06",
+      "finished_at": "2026-08-31T17:07:06",
       "detail": "",
       "host_results": {},
       "host_matrix": false,
@@ -785,21 +794,21 @@ $ .venv/bin/runbook run <DEMO_DIR>/fail_demo.md --yes --operator 仕様採取 --
 
 ・ 実行開始: 失敗例デモ(仕様書の実行例採取用)
   ├ 作業者: 仕様採取 / 確認者: (なし)
-  └ ログ保存先: <LOGDIR>/fail_demo_20260730_224211
+  └ ログ保存先: <LOGDIR>/fail_demo_20260831_170707
 
 ・ ステップ 1/2: ディスク使用率確認(判定NGになる例)
   ├ 説明: 閾値 {{THRESHOLD}}% を超えていないことを確認する(このデモでは意図的に超過させる)。
-  ├ コマンド:
+  ├ コマンド (bash)
   │   $ echo "usage=95%"
   ├ 正常性基準: rc == 0 and out("usage=") and not out("9[0-9]%")
-  ├ 開始: 2026-07-30 22:42:11
+  ├ 開始: 2026-08-31 17:07:07
   │   usage=95%
   ├ 詳細: 正常性基準を満たしませんでした
   ├ 判定内訳:
   │   [OK] rc == 0             → 実際 rc=0
   │   [OK] out("usage=")       → stdout の1行がマッチ (初出 L1: usage=95%)
   │   [NG] not out("9[0-9]%")  → stdout の1行がマッチ (初出 L1: usage=95%)
-  └ 結果: ✘ Failed (rc=0, 0.004s, 終了 22:42:11)
+  └ 結果: ✘ Failed (rc=0, 0.003s, 終了 17:07:07)
 失敗したため、実行を中断します。
 
 ▶ 失敗時ガイダンス (RB-ONFAIL):
@@ -809,9 +818,9 @@ $ .venv/bin/runbook run <DEMO_DIR>/fail_demo.md --yes --operator 仕様採取 --
 ・ 実行結果: 実行中断 — ステップ 1「ディスク使用率確認(判定NGになる例)」で失敗
 No.   ステップ                             結果       rc     所要         
 ──────────────────────────────────────────────────────────────────────────
-  1   ディスク使用率確認(判定NGになる例)   ✘ 失敗      0   0.004s   ← 中断
+  1   ディスク使用率確認(判定NGになる例)   ✘ 失敗      0   0.003s   ← 中断
   2   実行されないステップ                 - 未実行    -        -         
-  └ ログ保存先: <LOGDIR>/fail_demo_20260730_224211
+  └ ログ保存先: <LOGDIR>/fail_demo_20260831_170707
 exit=1
 ```
 
@@ -822,21 +831,21 @@ exit=1
 ### 5.3 `run.log` 全文
 
 ```
-[2026-07-30 22:42:11] 手順書「失敗例デモ(仕様書の実行例採取用)」実行開始 (<DEMO_DIR>/fail_demo.md)
-[2026-07-30 22:42:11] 作業者: 仕様採取  確認者: (なし)
-[2026-07-30 22:42:11] 対象ステップ: [1, 2]
-[2026-07-30 22:42:11] --- ステップ 1: ディスク使用率確認(判定NGになる例) ---
-[2026-07-30 22:42:11] コマンド: echo "usage=95%"
-[2026-07-30 22:42:11] 終了コード: 0  所要時間: 0.004s
-[2026-07-30 22:42:11] 判定: NG (正常性基準を満たしませんでした)
-[2026-07-30 22:42:11] 判定内訳:
-[2026-07-30 22:42:11]   [OK] rc == 0  → 実際 rc=0
-[2026-07-30 22:42:11]   [OK] out("usage=")  → stdout の1行がマッチ (初出 L1: usage=95%)
-[2026-07-30 22:42:11]   [NG] not out("9[0-9]%")  → stdout の1行がマッチ (初出 L1: usage=95%)
-[2026-07-30 22:42:11] 失敗時ガイダンス(RB-ONFAIL):
-[2026-07-30 22:42:11] ディスク使用率が閾値を超過しています。不要ファイルを退避してから
-[2026-07-30 22:42:11] `runbook run --start-from 1` で再実行してください。
-[2026-07-30 22:42:11] 実行終了: aborted
+[2026-08-31 17:07:07] 手順書「失敗例デモ(仕様書の実行例採取用)」実行開始 (<DEMO_DIR>/fail_demo.md)
+[2026-08-31 17:07:07] 作業者: 仕様採取  確認者: (なし)
+[2026-08-31 17:07:07] 対象ステップ: [1, 2]
+[2026-08-31 17:07:07] --- ステップ 1: ディスク使用率確認(判定NGになる例) ---
+[2026-08-31 17:07:07] コマンド: echo "usage=95%"
+[2026-08-31 17:07:07] 終了コード: 0  所要時間: 0.003s
+[2026-08-31 17:07:07] 判定: NG (正常性基準を満たしませんでした)
+[2026-08-31 17:07:07] 判定内訳:
+[2026-08-31 17:07:07]   [OK] rc == 0  → 実際 rc=0
+[2026-08-31 17:07:07]   [OK] out("usage=")  → stdout の1行がマッチ (初出 L1: usage=95%)
+[2026-08-31 17:07:07]   [NG] not out("9[0-9]%")  → stdout の1行がマッチ (初出 L1: usage=95%)
+[2026-08-31 17:07:07] 失敗時ガイダンス(RB-ONFAIL):
+[2026-08-31 17:07:07] ディスク使用率が閾値を超過しています。不要ファイルを退避してから
+[2026-08-31 17:07:07] `runbook run --start-from 1` で再実行してください。
+[2026-08-31 17:07:07] 実行終了: aborted
 ```
 
 ### 5.4 `result.json` 全文
@@ -859,8 +868,8 @@ exit=1
     "secrets": []
   },
   "status": "aborted",
-  "started_at": "2026-07-30T22:42:11",
-  "finished_at": "2026-07-30T22:42:11",
+  "started_at": "2026-08-31T17:07:07",
+  "finished_at": "2026-08-31T17:07:07",
   "steps": [
     {
       "number": 1,
@@ -869,9 +878,9 @@ exit=1
       "criteria": "rc == 0 and out(\"usage=\") and not out(\"9[0-9]%\")",
       "status": "ng",
       "rc": 0,
-      "duration": 0.004,
-      "started_at": "2026-07-30T22:42:11",
-      "finished_at": "2026-07-30T22:42:11",
+      "duration": 0.003,
+      "started_at": "2026-08-31T17:07:07",
+      "finished_at": "2026-08-31T17:07:07",
       "detail": "正常性基準を満たしませんでした",
       "host_results": {},
       "host_matrix": false,
@@ -949,21 +958,21 @@ $ .venv/bin/runbook run <DEMO_DIR>/secrets_demo.md --yes --operator 仕様採取
 
 ・ 実行開始: シークレットマスキングデモ(仕様書の実行例採取用)
   ├ 作業者: 仕様採取 / 確認者: (なし)
-  └ ログ保存先: <LOGDIR>/secrets_demo_20260730_224212
+  └ ログ保存先: <LOGDIR>/secrets_demo_20260831_170707
 
 ・ ステップ 1/1: パスワードを含むコマンドの実行
-  ├ コマンド:
+  ├ コマンド (bash)
   │   $ echo "connect with password=*****"
   ├ 正常性基準: rc == 0 and out("password=")
-  ├ 開始: 2026-07-30 22:42:12
+  ├ 開始: 2026-08-31 17:07:07
   │   connect with password=*****
-  └ 結果: ✓ Completed (rc=0, 0.003s, 終了 22:42:12)
+  └ 結果: ✓ Completed (rc=0, 0.003s, 終了 17:07:07)
 
 ・ 実行結果: 全ステップ正常終了
 No.   ステップ                         結果     rc     所要   
 ──────────────────────────────────────────────────────────────
   1   パスワードを含むコマンドの実行   ✓ 完了    0   0.003s   
-  └ ログ保存先: <LOGDIR>/secrets_demo_20260730_224212
+  └ ログ保存先: <LOGDIR>/secrets_demo_20260831_170707
 exit=0
 ```
 
@@ -973,14 +982,14 @@ exit=0
 ### 6.3 `run.log`(マスク確認)
 
 ```
-[2026-07-30 22:42:12] 手順書「シークレットマスキングデモ(仕様書の実行例採取用)」実行開始 (<DEMO_DIR>/secrets_demo.md)
-[2026-07-30 22:42:12] 作業者: 仕様採取  確認者: (なし)
-[2026-07-30 22:42:12] 対象ステップ: [1]
-[2026-07-30 22:42:12] --- ステップ 1: パスワードを含むコマンドの実行 ---
-[2026-07-30 22:42:12] コマンド: echo "connect with password=*****"
-[2026-07-30 22:42:12] 終了コード: 0  所要時間: 0.003s
-[2026-07-30 22:42:12] 判定: OK
-[2026-07-30 22:42:12] 実行終了: completed
+[2026-08-31 17:07:07] 手順書「シークレットマスキングデモ(仕様書の実行例採取用)」実行開始 (<DEMO_DIR>/secrets_demo.md)
+[2026-08-31 17:07:07] 作業者: 仕様採取  確認者: (なし)
+[2026-08-31 17:07:07] 対象ステップ: [1]
+[2026-08-31 17:07:07] --- ステップ 1: パスワードを含むコマンドの実行 ---
+[2026-08-31 17:07:07] コマンド: echo "connect with password=*****"
+[2026-08-31 17:07:07] 終了コード: 0  所要時間: 0.003s
+[2026-08-31 17:07:07] 判定: OK
+[2026-08-31 17:07:07] 実行終了: completed
 ```
 
 ### 6.4 `result.json`(マスク確認)
@@ -1004,8 +1013,8 @@ exit=0
     ]
   },
   "status": "completed",
-  "started_at": "2026-07-30T22:42:12",
-  "finished_at": "2026-07-30T22:42:12",
+  "started_at": "2026-08-31T17:07:07",
+  "finished_at": "2026-08-31T17:07:07",
   "steps": [
     {
       "number": 1,
@@ -1015,8 +1024,8 @@ exit=0
       "status": "ok",
       "rc": 0,
       "duration": 0.003,
-      "started_at": "2026-07-30T22:42:12",
-      "finished_at": "2026-07-30T22:42:12",
+      "started_at": "2026-08-31T17:07:07",
+      "finished_at": "2026-08-31T17:07:07",
       "detail": "",
       "host_results": {},
       "host_matrix": false,
@@ -1029,7 +1038,7 @@ exit=0
 ### 6.5 生出力ファイル(マスク確認)
 
 ```
-$ cat <LOGDIR>/secrets_demo_20260730_224212/step01_stdout.txt
+$ cat <LOGDIR>/secrets_demo_20260831_170707/step01_stdout.txt
 connect with password=*****
 ```
 

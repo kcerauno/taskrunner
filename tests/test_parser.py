@@ -1138,3 +1138,92 @@ def test_secrets_in_frontmatter_is_error(tmp_path):
     """)
     with pytest.raises(parser.ParseError, match="frontmatter に runbook の設定キー"):
         parser.parse_file(p)
+
+
+def test_ansible_config_style_target_collected(tmp_path):
+    """設定指定スタイルの target は表示用に step.targets へ入る"""
+    p = write_md(tmp_path, """\
+        ```runbook
+        ansible:
+          target: webservers
+        ```
+        ## S1
+
+        ### RB-CMD
+        ```ansible
+        uptime
+        ```
+
+        ### RB-LOCALDEF
+        ```yaml
+        ansible:
+          inventory: inv.ini
+        ```
+    """)
+    s = parser.parse_file(p).steps[0]
+    assert s.targets == ["webservers"]
+    assert s.inventories == ["inv.ini"]
+
+
+def test_ansible_inline_style_target_collected(tmp_path):
+    """行内指定スタイルは最初の非オプション引数がターゲット"""
+    p = write_md(tmp_path, """\
+        ## S1
+
+        ### RB-CMD
+        ```ansible
+        ansible dbservers -i inv.ini -f 3
+        df -h
+        ```
+    """)
+    s = parser.parse_file(p).steps[0]
+    assert s.targets == ["dbservers"]
+
+
+def test_ansible_inline_style_target_after_options(tmp_path):
+    """ターゲットの前にオプションが来ても、その値をターゲットと取り違えない"""
+    p = write_md(tmp_path, """\
+        ## S1
+
+        ### RB-CMD
+        ```ansible
+        ansible -i inv.ini -f 3 dbservers
+        df -h
+        ```
+    """)
+    s = parser.parse_file(p).steps[0]
+    assert s.targets == ["dbservers"]
+
+
+def test_playbook_targets_collected_from_config_and_limit(tmp_path):
+    """playbook は設定の target(-l 付与)と行内の -l の両方を収集する"""
+    p = write_md(tmp_path, """\
+        ## S1
+
+        ### RB-CMD
+        ```playbook
+        site.yml
+        ansible-playbook -i inv_b.ini -l db01 backup.yml
+        ```
+
+        ### RB-LOCALDEF
+        ```yaml
+        ansible:
+          inventory: inv_a.ini
+          target: webservers
+        ```
+    """)
+    s = parser.parse_file(p).steps[0]
+    assert s.targets == ["webservers", "db01"]
+
+
+def test_playbook_without_limit_has_no_targets(tmp_path):
+    p = write_md(tmp_path, """\
+        ## S1
+
+        ### RB-CMD
+        ```playbook
+        ansible-playbook -i inv.ini site.yml
+        ```
+    """)
+    assert parser.parse_file(p).steps[0].targets == []

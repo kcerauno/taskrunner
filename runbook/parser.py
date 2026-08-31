@@ -113,6 +113,7 @@ class Step:
     host_matrix: bool = False  # ansible: host_matrix: true でホスト別結果マトリックスを表示
     onfail: str = ""  # RB-ONFAIL: 失敗で中断した瞬間に表示する作業者向けガイダンス
     inventories: list[str] = field(default_factory=list)  # ansible系: 使用インベントリ(実行前サマリー表示用)
+    targets: list[str] = field(default_factory=list)  # ansible系: 実行対象(グループ/ホスト。ステップ表示の「対象」行用)
     # 見出しはあるが本文が空になった自由記述セクション名(check で警告する。
     # 内容をコードフェンスで囲むと _plain_text が捨てるため、黙って消えるのを防ぐ)
     empty_sections: list[str] = field(default_factory=list)
@@ -371,6 +372,7 @@ def _resolve_ansible_command(step: Step, defaults: dict, variables: dict[str, st
             parts += ["-e", shlex.quote(json.dumps(variables, ensure_ascii=False))]
         parts.append(inline_args)
         step.inventories = _extract_inventory_values(inline_args)
+        step.targets = _extract_adhoc_target(inline_args)
     else:
         if not inventory:
             raise ParseError(f"{ctx}: ansible の inventory が未指定です"
@@ -379,6 +381,7 @@ def _resolve_ansible_command(step: Step, defaults: dict, variables: dict[str, st
             raise ParseError(f"{ctx}: ansible の target(ホストグループ/ホスト名)が未指定です"
                              f"(共通設定/RB-LOCALDEF の ansible: か、フェンス1行目の ansible 行で指定)")
         parts = ["ansible", shlex.quote(target), "-i", shlex.quote(inventory)]
+        step.targets = [target]
         if variables:
             parts += ["-e", shlex.quote(json.dumps(variables, ensure_ascii=False))]
         step.inventories = [inventory]
@@ -432,6 +435,7 @@ def _resolve_playbook_command(step: Step, defaults: dict, variables: dict[str, s
     step.remote_command = "\n".join(lines)
     cmds = []
     used_inventories: list[str] = []
+    used_targets: list[str] = []
     for line in lines:
         if _PLAYBOOK_INLINE_PATTERN.match(line):
             # 行内指定: 起動指定をそのまま使い、設定側の inventory / target は
@@ -446,6 +450,7 @@ def _resolve_playbook_command(step: Step, defaults: dict, variables: dict[str, s
             if extra_args:
                 base.append(extra_args)
             used_inventories += _extract_inventory_values(rest)
+            used_targets += _extract_limit_values(rest)
             cmds.append(" ".join(base))
             continue
 
@@ -463,6 +468,7 @@ def _resolve_playbook_command(step: Step, defaults: dict, variables: dict[str, s
                 f"指定するか、行内に -i <インベントリ> を書いてください: {line!r}")
         if target:
             base += ["-l", shlex.quote(target)]
+            used_targets.append(target)
         if variables:
             base += ["-e", shlex.quote(json.dumps(variables, ensure_ascii=False))]
         if extra_args:
@@ -471,6 +477,8 @@ def _resolve_playbook_command(step: Step, defaults: dict, variables: dict[str, s
     step.command = " && ".join(cmds)
     seen: set[str] = set()
     step.inventories = [inv for inv in used_inventories if not (inv in seen or seen.add(inv))]
+    seen_t: set[str] = set()
+    step.targets = [t for t in used_targets if not (t in seen_t or seen_t.add(t))]
 
 
 def _tokenize(line: str) -> list[str]:
@@ -486,6 +494,43 @@ def _has_inventory_option(line: str) -> bool:
         tok.startswith("--inventory") or (tok.startswith("-i") and not tok.startswith("--"))
         for tok in _tokenize(line)
     )
+
+
+def _extract_limit_values(line: str) -> list[str]:
+    """行内の -l / --limit 指定から実行対象を取り出す(ステップ表示の「対象」行用)"""
+    tokens = _tokenize(line)
+    values: list[str] = []
+    for i, tok in enumerate(tokens):
+        if tok in ("-l", "--limit"):
+            if i + 1 < len(tokens):
+                values.append(tokens[i + 1])
+        elif tok.startswith("--limit="):
+            values.append(tok.split("=", 1)[1])
+    return values
+
+
+def _extract_adhoc_target(line: str) -> list[str]:
+    """ansible ad-hoc の行内指定から実行対象(最初の非オプション引数)を取り出す。
+
+    `webservers -i inv.ini -f 6` の webservers。オプションの値を取り違えないよう、
+    値を取る主なオプションの直後のトークンは読み飛ばす。
+    """
+    value_opts = {"-i", "--inventory", "-l", "--limit", "-e", "--extra-vars",
+                  "-m", "--module-name", "-a", "--args", "-f", "--forks",
+                  "-u", "--user", "-T", "--timeout", "--become-user"}
+    tokens = _tokenize(line)
+    skip = False
+    for tok in tokens:
+        if skip:
+            skip = False
+            continue
+        if tok in value_opts:
+            skip = True
+            continue
+        if tok.startswith("-"):
+            continue
+        return [tok]
+    return []
 
 
 def _extract_inventory_values(line: str) -> list[str]:

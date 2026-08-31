@@ -35,38 +35,87 @@ def print_tree_item(header: str, text: str, style: str = "") -> None:
             console.print(f"  │   {escape(line)}")
 
 
-def show_step_header(step, total: int, mask=lambda t: t, preview: bool = False) -> None:
-    """ステップヘッダ・コマンド・正常性基準の表示。
+# ステップ表示の配色(1つの色に1つの意味だけを持たせる)
+STYLE_TITLE = "bold #cfd3ea"
+STYLE_DESC = "#6f7590"          # 説明は一段落として背景に
+STYLE_CMD = "bold #7ee0ee"      # RB-CMD の原文(何をするか)
+STYLE_FULL_CMD = "#6f7590"      # 組み立て後の実行コマンド全文(監査の控え)
+STYLE_CRITERIA = "bold #8ea7ff"
+STYLE_INVENTORY = "bold #f2b94d"  # どの環境か(取り違えが最も高くつく)
+STYLE_TARGET = "bold #ffa8d8"     # どのホスト/グループか
+STYLE_CHANGED = "bold #ff6b60"    # 前ステップから実行先が変わった
 
+
+def target_signature(step) -> tuple[tuple[str, ...], tuple[str, ...]] | None:
+    """ステップの実行先(ターゲット, インベントリ)。ansible 系以外は None。"""
+    if step.runner not in ("ansible", "playbook"):
+        return None
+    return (tuple(step.targets), tuple(step.inventories))
+
+
+def _print_target_line(step, mask, prev_signature) -> None:
+    """「対象」行: どのインベントリの、どのホストで実行されるか。
+
+    ansible 系はステップごとにインベントリ/ターゲットが変わりうるため、
+    実行コマンド全文を目で追わなくても実行先が読めるように独立した行にする。
+    直前の ansible 系ステップとの一致/不一致も明示する(取り違えの検知)。
+    """
+    # playbook で -l 指定がない場合、対象はプレイブックの hosts: が決める
+    no_target = "(プレイブックの hosts:)" if step.runner == "playbook" else "(指定なし)"
+    targets = ", ".join(mask(t) for t in step.targets) or no_target
+    inventories = ", ".join(mask(i) for i in step.inventories) or "(指定なし)"
+    signature = target_signature(step)
+    if prev_signature is None:
+        mark = f" [{STYLE_DESC}](最初の実行対象)[/]"
+    elif prev_signature == signature:
+        mark = f" [{STYLE_DESC}]= 前ステップと同じ[/]"
+    else:
+        mark = f" [{STYLE_CHANGED}]⇄ 前ステップから変更[/]"
+    console.print(
+        f"  ├ 対象: [{STYLE_TARGET}]{escape(targets)}[/] [{STYLE_DESC}]@[/] "
+        f"[{STYLE_INVENTORY}]{escape(inventories)}[/]{mark}"
+    )
+
+
+def show_step_header(step, total: int, mask=lambda t: t, preview: bool = False,
+                     prev_signature=None) -> None:
+    """ステップヘッダ・対象・コマンド・正常性基準の表示。
+
+    表示順は 説明 → 対象 → コマンド → 実行コマンド → 正常性基準。
     run の実行時ステップ表示と check --preview の第2部(D2)で共用する。
+    prev_signature は直前の ansible 系ステップの target_signature()。
+    None を渡すと「最初の実行対象」として扱う(比較対象がない)。
+
     preview=True の手動ステップは、まだ実行していないことを明示するため
     「上記の作業を実施してください」ではなく「作業者の完了確認のみ」と表示する。
     """
     console.print()
-    console.print(f"・ ステップ {step.number}/{total}: [bold #cfd3ea]{escape(step.title)}[/]")
+    console.print(f"・ ステップ {step.number}/{total}: [{STYLE_TITLE}]{escape(step.title)}[/]")
     if step.description:
-        print_tree_item("説明", step.description)
+        print_tree_item("説明", step.description, style=STYLE_DESC)
     if step.runner == "manual":
         if preview:
             console.print("  └ [bold #f2b94d]手動ステップ[/](作業者の完了確認のみ)")
         else:
             console.print("  └ [bold #f2b94d]手動ステップ[/](コマンドなし。上記の作業を実施してください)")
         return
+    if step.runner in ("ansible", "playbook"):
+        _print_target_line(step, mask, prev_signature)
     if step.runner == "ansible":
-        console.print("  ├ コマンド (ansible ad-hoc / shellモジュール):")
+        console.print(f"  ├ [bold]コマンド[/] [{STYLE_DESC}](ansible ad-hoc / shellモジュール)[/]")
         for line in mask(step.remote_command).splitlines():
-            console.print(f"  │   $ {escape(line)}", style="cyan")
-        print_tree_item("実行コマンド", mask(step.command), style="dim")
+            console.print(f"  │   [{STYLE_CMD}]$ {escape(line)}[/]")
+        print_tree_item("実行コマンド", mask(step.command), style=STYLE_FULL_CMD)
     elif step.runner == "playbook":
-        console.print("  ├ プレイブック (ansible-playbook):")
+        console.print(f"  ├ [bold]プレイブック[/] [{STYLE_DESC}](ansible-playbook)[/]")
         for line in mask(step.remote_command).splitlines():
-            console.print(f"  │   {escape(line)}", style="cyan")
-        print_tree_item("実行コマンド", mask(step.command), style="dim")
+            console.print(f"  │   [{STYLE_CMD}]{escape(line)}[/]")
+        print_tree_item("実行コマンド", mask(step.command), style=STYLE_FULL_CMD)
     else:
-        console.print("  ├ コマンド:")
+        console.print(f"  ├ [bold]コマンド[/] [{STYLE_DESC}](bash)[/]")
         for line in mask(step.command).splitlines():
-            console.print(f"  │   $ {escape(line)}", style="cyan")
-    print_tree_item("正常性基準", mask(step.criteria), style="bold #8ea7ff")
+            console.print(f"  │   [{STYLE_CMD}]$ {escape(line)}[/]")
+    print_tree_item("正常性基準", mask(step.criteria), style=STYLE_CRITERIA)
 
 
 # ホスト別結果マトリックスのマーク: 状態 → (表示文字, スタイル)

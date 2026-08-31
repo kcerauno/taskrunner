@@ -2,7 +2,13 @@
 
 from runbook.executor import StepRecord
 from runbook.parser import Step
-from runbook.render import console, output_line_style, result_table
+from runbook.render import (
+    console,
+    output_line_style,
+    result_table,
+    show_step_header,
+    target_signature,
+)
 
 
 def render_to_text(renderable) -> str:
@@ -82,3 +88,61 @@ def test_output_line_style_recap_only_flagged_when_nonzero_failures():
 def test_output_line_style_plain_output_unstyled():
     assert output_line_style("機能テスト: host=web03") is None
     assert output_line_style("  ふつうの出力") is None
+
+
+def capture_step_header(step, prev_signature=None) -> str:
+    with console.capture() as cap:
+        show_step_header(step, 3, prev_signature=prev_signature)
+    return cap.get()
+
+
+def ansible_step(number: int, target: str, inventory: str) -> Step:
+    return Step(number=number, title=f"S{number}", description="説明本文",
+                runner="ansible", remote_command="uptime",
+                command=f"ansible {target} -i {inventory} -m shell -a uptime",
+                criteria="rc == 0", targets=[target], inventories=[inventory])
+
+
+def test_step_header_block_order():
+    """表示順は 説明 → 対象 → コマンド → 実行コマンド → 正常性基準"""
+    text = capture_step_header(ansible_step(1, "webservers", "inv.ini"))
+    order = [text.index(label) for label in
+             ("説明:", "対象:", "コマンド (ansible", "実行コマンド:", "正常性基準:")]
+    assert order == sorted(order)
+
+
+def test_step_header_target_line_marks_first_step():
+    text = capture_step_header(ansible_step(1, "webservers", "inv.ini"))
+    assert "対象: webservers @ inv.ini (最初の実行対象)" in text
+
+
+def test_step_header_target_line_marks_change_from_previous_step():
+    """インベントリ/ターゲットが前の ansible ステップから変わったら明示する"""
+    prev = target_signature(ansible_step(1, "webservers", "inv.ini"))
+    text = capture_step_header(ansible_step(2, "db01", "db_prod.ini"), prev_signature=prev)
+    assert "⇄ 前ステップから変更" in text
+
+
+def test_step_header_target_line_marks_same_as_previous_step():
+    prev = target_signature(ansible_step(1, "webservers", "inv.ini"))
+    text = capture_step_header(ansible_step(2, "webservers", "inv.ini"), prev_signature=prev)
+    assert "= 前ステップと同じ" in text
+
+
+def test_step_header_shell_step_has_no_target_line():
+    """bash ステップは実行先を持たないので「対象」行を出さない"""
+    step = Step(number=1, title="S1", runner="shell", command="uname -a", criteria="rc == 0")
+    text = capture_step_header(step)
+    assert "対象:" not in text
+
+
+def test_target_signature_is_none_for_non_ansible_steps():
+    assert target_signature(Step(number=1, title="S1", runner="shell")) is None
+    assert target_signature(Step(number=1, title="S1", runner="manual")) is None
+
+
+def test_step_header_playbook_without_limit_says_hosts_come_from_playbook():
+    step = Step(number=1, title="S1", runner="playbook",
+                remote_command="site.yml", command="ansible-playbook -i inv.ini site.yml",
+                criteria="rc == 0", inventories=["inv.ini"])
+    assert "(プレイブックの hosts:)" in capture_step_header(step)
