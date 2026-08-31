@@ -1,4 +1,0 @@
-db02 | CHANGED | rc=0 >>
-HOGE=ADHOC on db02
-db01 | CHANGED | rc=0 >>
-HOGE=ADHOC on db01

@@ -1,6 +1,0 @@
-web02 | CHANGED | rc=0 >>
- 16:58:28 up  8:03,  1 user,  load average: 1.00, 1.15, 0.86
-web01 | CHANGED | rc=0 >>
- 16:58:28 up  8:03,  1 user,  load average: 1.00, 1.15, 0.86
-web03 | CHANGED | rc=0 >>
- 16:58:28 up  8:03,  1 user,  load average: 1.00, 1.15, 0.86

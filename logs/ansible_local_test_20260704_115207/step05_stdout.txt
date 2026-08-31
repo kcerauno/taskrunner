@@ -1,6 +1,0 @@
-web02 | CHANGED | rc=0 >>
-定期点検: web02 は正常です
-web01 | CHANGED | rc=0 >>
-定期点検: web01 は正常です
-web03 | CHANGED | rc=0 >>
-定期点検: web03 は正常です
