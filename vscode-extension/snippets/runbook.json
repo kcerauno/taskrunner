@@ -18,7 +18,7 @@
       "```",
       "$0"
     ],
-    "description": "コマンドステップの雛形(DESCRIPTION / CMD / EXPECTED)"
+    "description": "コマンドステップの雛形(DESCRIPTION / CMD / EXPECTED。設定が要るときは rblocaldef を CMD の前に挿入)"
   },
   "runbook: 手動ステップ": {
     "prefix": "rbmanual",
@@ -61,16 +61,35 @@
     "body": ["### RB-CMD", "```bash", "${1:command}", "```", "$0"],
     "description": "実行するコマンド"
   },
-  "runbook: RB-CMD (ansible)": {
+  "runbook: ansible ad-hoc (RB-LOCALDEF スタイル)": {
     "prefix": "rbansible",
     "body": [
+      "### RB-LOCALDEF",
+      "```yaml",
+      "ansible:",
+      "  inventory: ${1:inventory.ini}",
+      "  target: ${2:web}",
+      "```",
+      "",
       "### RB-CMD",
       "```ansible",
-      "-i ${1:inventory.ini} ${2:web} -m ${3:shell} -a '${4:uptime}'",
+      "${3:uptime}",
       "```",
       "$0"
     ],
-    "description": "ansible ad-hoc ラッパー"
+    "description": "ansible ad-hoc(inventory/target を RB-LOCALDEF に書き、フェンスにはリモートコマンドだけを書く)"
+  },
+  "runbook: ansible ad-hoc (行内指定スタイル)": {
+    "prefix": "rbansibleinline",
+    "body": [
+      "### RB-CMD",
+      "```ansible",
+      "ansible ${1:web} -i ${2:inventory.ini}",
+      "${3:uptime}",
+      "```",
+      "$0"
+    ],
+    "description": "ansible ad-hoc(1行目に起動指定、2行目以降がリモートコマンド)"
   },
   "runbook: RB-CMD (playbook)": {
     "prefix": "rbplaybook",

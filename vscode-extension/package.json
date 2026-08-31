@@ -2,7 +2,7 @@
   "name": "runbook-md",
   "displayName": "runbook — Markdown手順書 入力支援",
   "description": "runbook 形式の Markdown 手順書の入力支援(スニペット・色分け・アウトライン・runbook check 連携)",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "publisher": "wk-tool",
   "license": "MIT",
   "engines": { "vscode": "^1.75.0" },

@@ -6,10 +6,10 @@ runbook 形式の Markdown 手順書を書くための VSCode 拡張。ビルド
 
 | 機能 | 内容 |
 |---|---|
-| スニペット | `rbtemplate`(手順書全体) / `rbstep` / `rbmanual` / `rbcmd` / `rbansible` / `rbplaybook` / `rbexpected` / `rbexpected2` / `rbdesc` / `rbonfail` / `rblocaldef` / `rbconfig` / `rbconfigfull` |
+| スニペット | `rbtemplate`(手順書全体) / `rbstep` / `rbmanual` / `rbcmd` / `rbansible` / `rbansibleinline` / `rbplaybook` / `rbexpected` / `rbexpected2` / `rbdesc` / `rbonfail` / `rblocaldef` / `rbconfig` / `rbconfigfull` |
 | 診断 | 保存時に `runbook check --json` を実行し、書式エラー・基準式エラーを赤波線、警告(見出し番号のずれ、空の RB-ONFAIL、共通設定の未知キー、インベントリ/playbook/cwd の不在)を黄波線で表示 |
 | アウトライン | `## 見出し` をステップ、`### RB-*` をその子として表示(手動ステップは「手動ステップ」と注記) |
-| 色分け | `### RB-*` セクション見出し、```` ```runbook ```` フェンス、`{{VAR}}` を強調 |
+| 色分け | `### RB-*` セクション見出しと `{{VAR}}` を強調。さらに Markdown が知らない独自フェンス言語の中身に文法を埋め込む(```` ```runbook ```` → YAML、```` ```ansible ```` / ```` ```playbook ```` / ```` ```ansible-playbook ```` → shell) |
 | コマンド | コマンドパレット(または右クリック)から `check` / `check --preview` / `list --detail` / `renumber` / `run -i` を実行 |
 
 対象は「`### RB-` または ```` ```runbook ```` を含む Markdown」だけで、普通の Markdown には
@@ -43,10 +43,12 @@ VSCode は Markdown では既定で補完ポップアップを出さないため
 | プレフィックス | 展開されるもの |
 |---|---|
 | `rbtemplate` | 手順書ファイル全体(タイトル + 共通設定 + 最初のステップ) |
-| `rbstep` | コマンドステップ(RB-DESCRIPTION / RB-CMD / RB-EXPECTED) |
+| `rbstep` | コマンドステップ(RB-DESCRIPTION / RB-CMD / RB-EXPECTED。設定が要るときは `rblocaldef` を RB-CMD の前に挿入) |
 | `rbmanual` | 手動ステップ(RB-CMD なし。RB-DESCRIPTION のみ) |
 | `rbconfig` / `rbconfigfull` | ```` ```runbook ```` 共通設定(後者は title / secrets 付き) |
-| `rbcmd` / `rbansible` / `rbplaybook` | RB-CMD(bash / ansible ad-hoc / playbook) |
+| `rbcmd` / `rbplaybook` | RB-CMD(bash / playbook) |
+| `rbansible` | ansible ad-hoc(RB-LOCALDEF に inventory/target + RB-CMD にリモートコマンド) |
+| `rbansibleinline` | ansible ad-hoc の行内指定スタイル(フェンス1行目に `ansible <target> -i <inv>`) |
 | `rbexpected` / `rbexpected2` | RB-EXPECTED(後者は `rc == 0 and out(...) and not out(...)`) |
 | `rbdesc` / `rbonfail` / `rblocaldef` | RB-DESCRIPTION / RB-ONFAIL / RB-LOCALDEF |
 

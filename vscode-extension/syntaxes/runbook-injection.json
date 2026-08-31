@@ -1,25 +1,95 @@
 {
   "scopeName": "markdown.runbook.injection",
   "injectionSelector": "L:text.html.markdown",
+  "comment": "runbook 独自のフェンス言語名(runbook / ansible / playbook)は一般の Markdown 文法が知らないため中身が無着色になる。ここで YAML / shell 文法を埋め込んで色を付ける。",
   "patterns": [
+    { "include": "#rb-fence-runbook" },
+    { "include": "#rb-fence-ansible" },
+    { "include": "#rb-fence-playbook" },
     { "include": "#rb-section" },
-    { "include": "#rb-config-fence" },
     { "include": "#rb-var" }
   ],
   "repository": {
+    "rb-fence-runbook": {
+      "comment": "```runbook 共通設定フェンス → YAML として着色",
+      "name": "markup.fenced_code.block.markdown",
+      "begin": "(^|\\G)(\\s*)(`{3,}|~{3,})\\s*(?i:(runbook)((\\s+|:|,|\\{|\\?)[^`~]*)?$)",
+      "end": "(^|\\G)(\\2|\\s{0,3})(\\3)\\s*$",
+      "beginCaptures": {
+        "3": { "name": "punctuation.definition.markdown" },
+        "4": { "name": "entity.name.tag.runbook keyword.control.runbook" },
+        "5": { "name": "fenced_code.block.language.attributes.markdown" }
+      },
+      "endCaptures": {
+        "3": { "name": "punctuation.definition.markdown" }
+      },
+      "patterns": [
+        {
+          "begin": "(^|\\G)(\\s*)(.*)",
+          "while": "(^|\\G)(?!\\s*([`~]{3,})\\s*$)",
+          "contentName": "meta.embedded.block.yaml",
+          "patterns": [
+            { "include": "#rb-var" },
+            { "include": "source.yaml" }
+          ]
+        }
+      ]
+    },
+    "rb-fence-ansible": {
+      "comment": "```ansible ad-hoc フェンス → shell として着色(中身はリモートで実行されるコマンド)",
+      "name": "markup.fenced_code.block.markdown",
+      "begin": "(^|\\G)(\\s*)(`{3,}|~{3,})\\s*(?i:(ansible)((\\s+|:|,|\\{|\\?)[^`~]*)?$)",
+      "end": "(^|\\G)(\\2|\\s{0,3})(\\3)\\s*$",
+      "beginCaptures": {
+        "3": { "name": "punctuation.definition.markdown" },
+        "4": { "name": "entity.name.tag.runbook keyword.control.runbook" },
+        "5": { "name": "fenced_code.block.language.attributes.markdown" }
+      },
+      "endCaptures": {
+        "3": { "name": "punctuation.definition.markdown" }
+      },
+      "patterns": [
+        {
+          "begin": "(^|\\G)(\\s*)(.*)",
+          "while": "(^|\\G)(?!\\s*([`~]{3,})\\s*$)",
+          "contentName": "meta.embedded.block.shellscript",
+          "patterns": [
+            { "include": "#rb-var" },
+            { "include": "source.shell" }
+          ]
+        }
+      ]
+    },
+    "rb-fence-playbook": {
+      "comment": "```playbook / ```ansible-playbook フェンス → shell として着色(各行が ansible-playbook の引数列)",
+      "name": "markup.fenced_code.block.markdown",
+      "begin": "(^|\\G)(\\s*)(`{3,}|~{3,})\\s*(?i:(ansible-playbook|playbook)((\\s+|:|,|\\{|\\?)[^`~]*)?$)",
+      "end": "(^|\\G)(\\2|\\s{0,3})(\\3)\\s*$",
+      "beginCaptures": {
+        "3": { "name": "punctuation.definition.markdown" },
+        "4": { "name": "entity.name.tag.runbook keyword.control.runbook" },
+        "5": { "name": "fenced_code.block.language.attributes.markdown" }
+      },
+      "endCaptures": {
+        "3": { "name": "punctuation.definition.markdown" }
+      },
+      "patterns": [
+        {
+          "begin": "(^|\\G)(\\s*)(.*)",
+          "while": "(^|\\G)(?!\\s*([`~]{3,})\\s*$)",
+          "contentName": "meta.embedded.block.shellscript",
+          "patterns": [
+            { "include": "#rb-var" },
+            { "include": "source.shell" }
+          ]
+        }
+      ]
+    },
     "rb-section": {
       "comment": "### RB-CMD / RB-EXPECTED / ... のセクション見出し",
       "match": "^(###)\\s+((?i:RB-(?:CMD|EXPECTED|DESCRIPTION|LOCALDEF|ONFAIL)))\\s*$",
       "captures": {
         "1": { "name": "punctuation.definition.heading.markdown" },
-        "2": { "name": "entity.name.tag.runbook keyword.control.runbook" }
-      }
-    },
-    "rb-config-fence": {
-      "comment": "```runbook 共通設定フェンスの開始行",
-      "match": "^\\s*(```)(runbook)\\s*$",
-      "captures": {
-        "1": { "name": "punctuation.definition.markdown" },
         "2": { "name": "entity.name.tag.runbook keyword.control.runbook" }
       }
     },
