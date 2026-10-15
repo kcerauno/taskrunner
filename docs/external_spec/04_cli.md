@@ -3,7 +3,7 @@
 ## 1. コマンド体系
 
 ```
-runbook [--version] <subcommand> ...
+runbook [--version] [--no-color] <subcommand> ...
 
 runbook run      [オプション] <手順書.md>   実行
 runbook list     [--detail] [--var ...] <手順書.md>    ステップ一覧表示
@@ -12,6 +12,8 @@ runbook renumber [--var ...] <手順書.md>    ## 見出しへの連番付与(�
 ```
 
 - サブコマンドは必須。`--version` は `runbook 0.4.0` 形式を表示して終了。
+- `--no-color`: 色を付けずに表示する(環境変数 `NO_COLOR` を設定しても同じ)。
+  サブコマンドより前に書く(例: `runbook --no-color run 手順書.md`)。
 - 全サブコマンド共通の引数:
   - `file`(位置引数、必須): 手順書 Markdown ファイルのパス
   - `--var KEY=VALUE`(複数回指定可): 手順書変数の指定/上書き。`=` を含まない値は

@@ -32,23 +32,36 @@ from pathlib import Path
 
 from rich.cells import cell_len
 from rich.markup import escape
+from rich.text import Text
 
-from . import __version__, criteria, parser
+from . import __version__, criteria, parser, render
 from .artifacts import RunArtifacts, atomic_write_text
 from .envstate import EnvManager
 from .executor import StepRecord, parse_ansible_host_results, run_command
 from .render import (
     MASK,
+    MUTED,
+    NG,
+    OUTPUT_PREFIX,
+    STYLE_NG,
+    STYLE_OK,
+    STYLE_WARN,
+    WARN,
     _MATRIX_LEGEND,
     console,
     host_results_logline,
+    notice,
     output_line_style,
     print_host_matrix,
-    print_tree_item,
+    print_indented,
+    prompt,
+    result_label,
     result_table,
+    section_rule,
     show_step_header,
     target_signature,
     step_table,
+    tree_item,
 )
 
 
@@ -101,15 +114,13 @@ def make_mask(proc):
 def confirm_interactive(step) -> str:
     """戻り値: run / skip / quit"""
     while True:
-        console.print(
-            f"[bold cyan]▶ 上記ステップ {step.number}「{escape(step.title)}」を実行しますか？ "
-            f"\\[Enter]=実行  s=スキップ  q=中断[/bold cyan] > ",
-            end="",
-        )
+        # ステップ番号とタイトルは直上の罫線に出ているので繰り返さない
+        prompt(f"ステップ {step.number} を実行しますか？ [Enter=実行  s=スキップ  q=中断]")
         try:
             ans = input().strip().lower()
         except EOFError:
-            console.print("\n[bold red]対話端末がありません(逐次実行 -i は端末から実行してください)[/]")
+            console.print()
+            notice("対話端末がありません(逐次実行 -i は端末から実行してください)", STYLE_NG)
             return "quit"
         if ans in ("", "r", "run", "y"):
             return "run"
@@ -126,15 +137,12 @@ def confirm_manual(step, allow_skip: bool) -> str:
     """
     choices = "y=完了して続行  " + ("s=スキップ  " if allow_skip else "") + "q=中断"
     while True:
-        console.print(
-            f"[bold #f2b94d]▶ 手動ステップ {step.number}「{escape(step.title)}」: "
-            f"作業を実施し、完了したら y を入力してください \\[{choices}][/] > ",
-            end="",
-        )
+        prompt(f"作業を実施し、完了したら y を入力してください [{choices}]", STYLE_WARN)
         try:
             ans = input().strip().lower()
         except EOFError:
-            console.print("\n[bold red]対話端末がありません(手動ステップを含む手順書は端末から実行してください)[/]")
+            console.print()
+            notice("対話端末がありません(手動ステップを含む手順書は端末から実行してください)", STYLE_NG)
             return "quit"
         if ans in ("y", "yes", "done"):
             return "done"
@@ -144,14 +152,26 @@ def confirm_manual(step, allow_skip: bool) -> str:
             return "quit"
 
 
+def show_result_line(status: str, note: str) -> None:
+    """実行ブロックを閉じる「結果」行。スキップ・中断でも必ずここでツリーを閉じる。
+
+    表記は最終の一覧表(result_table)と同じ「✓ 完了 / ✘ 失敗」に揃える。
+    """
+    if status == "quit":
+        label, style = "■ 中断", STYLE_NG
+    else:
+        label, style = result_label(status)
+    tree_item("結果", Text.assemble((label, style), (f"  ({note})", "") if note else ""), last=True)
+
+
 def show_onfail_guidance(step, art) -> None:
     """RB-ONFAIL(失敗時ガイダンス)を表示・記録する(提案B)"""
     if not step.onfail:
         return
     console.print()
-    console.print("[bold #f2b94d]▶ 失敗時ガイダンス (RB-ONFAIL):[/]")
+    console.print(Text("  ▶ 失敗時ガイダンス (RB-ONFAIL)", style=STYLE_WARN))
     for line in step.onfail.splitlines():
-        console.print(f"  {escape(line)}", style="#f2b94d")
+        console.print(Text.assemble(("  ┃ ", WARN), (line, WARN)))
     art.log("失敗時ガイダンス(RB-ONFAIL):")
     art.log(step.onfail)
 
@@ -162,68 +182,46 @@ def show_run_summary(proc, steps, selected: set[int], mode: str, mask=lambda t: 
     inventories = sorted({inv for s in steps if s.number in selected for inv in s.inventories})
     n_manual = sum(1 for s in steps if s.number in selected and s.runner == "manual")
 
-    has_vars = bool(proc.vars)
-    has_secrets = bool(proc.secrets)
-    has_inventories = bool(inventories)
-    has_start_from = start_from is not None
-    # 最後に表示するブロックだけ "└" にする(それ以外は "├")。優先順位は表示順の逆。
-    last = ("start_from" if has_start_from else
-            "inventories" if has_inventories else
-            "secrets" if has_secrets else
-            "vars" if has_vars else
-            "target")
-
-    def conn(name: str) -> str:
-        return "└" if name == last else "├"
-
-    def sub(name: str) -> str:
-        # そのブロックが最後(└)なら、続く行は "│" ではなく空白で揃える
-        return "  │   " if name != last else "      "
-
-    console.print()
-    console.print("・ 実行前確認")
-    console.print(f"  ├ 手順書: [bold #cfd3ea]{escape(proc.title)}[/] ({proc.path})")
-    console.print(f"  ├ モード: {mode}", markup=False)
-
-    label = f"  {conn('target')} 実行対象: {len(selected)}/{len(steps)} ステップ"
-    if n_manual:
-        label += f"(うち手動 {n_manual})"
-    console.print(label, markup=False)
+    items: list[tuple[str, object]] = [
+        ("手順書", Text.assemble((proc.title, "bold"), (f"  ({proc.path})", MUTED))),
+        ("モード", mode),
+    ]
+    target = f"{len(selected)}/{len(steps)} ステップ" + (f"(うち手動 {n_manual})" if n_manual else "")
     for s in steps:
         if s.number in selected:
-            tag = "(手動)" if s.runner == "manual" else ""
-            console.print(f"{sub('target')}{s.number}. {s.title}{tag}", markup=False)
-
-    if has_vars:
-        console.print(f"  {conn('vars')} 変数:")
-        for k, v in proc.vars.items():
-            disp = MASK if k in proc.secrets else mask(v)
-            console.print(f"{sub('vars')}{k} = {disp}", markup=False)
-
-    if has_secrets:
-        console.print(f"  {conn('secrets')} 秘匿変数(値は表示・ログでマスク): {', '.join(proc.secrets)}",
-                      markup=False)
-        console.print(f"{sub('secrets')}[bold #f2b94d]注意: export した値は env_overlay.sh に平文で残ります"
-                      "(保管・削除ルールに注意)[/]")
-
-    if has_inventories:
-        console.print(f"  {conn('inventories')} 使用インベントリ:")
-        for inv in inventories:
-            console.print(f"{sub('inventories')}{inv}", markup=False)
-
-    if has_start_from:
-        console.print(f"  {conn('start_from')} 再開実行(--start-from): ステップ {start_from} から", markup=False)
+            # タイトルに「手動」と書いてあれば (手動) を重ねない
+            tag = "(手動)" if s.runner == "manual" and "手動" not in s.title else ""
+            target += f"\n{s.number}. {s.title}{tag}"
+    items.append(("実行対象", target))
+    if proc.vars:
+        items.append(("変数", "\n".join(
+            f"{k} = {MASK if k in proc.secrets else mask(v)}" for k, v in proc.vars.items())))
+    if proc.secrets:
+        items.append(("秘匿変数", Text.assemble(
+            ", ".join(proc.secrets), ("  (値は表示・ログでマスク)", MUTED),
+            ("\n注意: export した値は env_overlay.sh に平文で残ります(保管・削除ルールに注意)", WARN))))
+    if inventories:
+        items.append(("インベントリ", "\n".join(inventories)))
+    if start_from is not None:
+        resume = f"ステップ {start_from} から(--start-from)"
         if resume_env_src:
-            console.print(f"{sub('start_from')}環境変数の復元元: {resume_env_src}", markup=False)
+            resume += f"\n環境変数の復元元: {resume_env_src}"
+        items.append(("再開実行", resume))
+
+    section_rule("実行前確認")
+    for i, (label, value) in enumerate(items):
+        tree_item(label, value, last=i == len(items) - 1)
 
 
 def confirm_gate() -> bool:
     """実行前サマリーの確認ゲート。y の明示入力のみ実行(それ以外は中止)"""
-    console.print("[bold cyan]▶ 上記の内容で実行しますか？ \\[y=実行  それ以外=中止][/] > ", end="")
+    console.print()
+    prompt("上記の内容で実行しますか？ [y=実行  それ以外=中止]")
     try:
         ans = input().strip().lower()
     except EOFError:
-        console.print("\n[bold red]対話端末がありません(非対話実行では --yes を指定してください)[/]")
+        console.print()
+        notice("対話端末がありません(非対話実行では --yes を指定してください)", STYLE_NG)
         return False
     return ans in ("y", "yes")
 
@@ -233,7 +231,7 @@ def ask_names(args) -> tuple[str, str]:
     if args.operator:
         return args.operator, args.checker or ""
     while True:
-        console.print("[bold cyan]▶ 作業者名を入力してください(必須)[/] > ", end="")
+        prompt("作業者名を入力してください(必須)")
         try:
             operator = input().strip()
         except EOFError:
@@ -242,7 +240,7 @@ def ask_names(args) -> tuple[str, str]:
             break
     if args.checker is not None:
         return operator, args.checker
-    console.print("[bold cyan]▶ 確認者名を入力してください(任意。Enter でスキップ)[/] > ", end="")
+    prompt("確認者名を入力してください(任意。Enter でスキップ)")
     try:
         checker = input().strip()
     except EOFError:
@@ -329,7 +327,7 @@ def cmd_run(args: argparse.Namespace) -> int:
     show_run_summary(proc, steps, selected, mode, mask,
                      start_from=args.start_from, resume_env_src=resume_src)
     if not args.yes and not confirm_gate():
-        console.print("[red]→ 実行を中止しました[/red]")
+        notice("→ 実行を中止しました")
         return 130
 
     # 提案D: 作業者・確認者の記録
@@ -359,13 +357,13 @@ def cmd_run(args: argparse.Namespace) -> int:
     # 実行開始時点で status="running" の初期状態を書いておく
     art.save_result("running")
 
-    console.print()
-    console.print(f"・ 実行開始: [bold #cfd3ea]{escape(proc.title)}[/]")
-    console.print(f"  ├ 作業者: {operator}" + (f" / 確認者: {checker}" if checker else " / 確認者: (なし)"),
-                  markup=False)
+    section_rule("実行開始")
+    tree_item("手順書", Text(proc.title, style="bold"))
+    tree_item("作業者", operator)
+    tree_item("確認者", checker or "(なし)")
     if resume_src:
-        console.print(f"  ├ 環境変数を復元: {resume_src}", markup=False)
-    console.print(f"  └ ログ保存先: {art.dir}", markup=False)
+        tree_item("環境変数復元", str(resume_src))
+    tree_item("ログ保存先", str(art.dir), last=True)
     art.log(f"手順書「{proc.title}」実行開始 ({proc.path})")
     art.log(f"作業者: {operator}  確認者: {checker or '(なし)'}")
     art.log(f"対象ステップ: {sorted(selected)}")
@@ -390,6 +388,8 @@ def cmd_run(args: argparse.Namespace) -> int:
             art.log(f"--- ステップ {step.number}: {step.title} ---")
 
             # 提案A: 手動ステップ(RB-CMD なし)。説明を表示して作業者の完了確認を待つ
+            # 計画ブロック(show_step_header)と実行ブロックの間は空行で分ける
+            console.print()
             if step.runner == "manual":
                 art.log("手動ステップ(作業者の完了確認待ち)")
                 rec.started_at = datetime.now().isoformat(timespec="seconds")
@@ -400,20 +400,20 @@ def cmd_run(args: argparse.Namespace) -> int:
                     rec.detail = f"作業者({operator})が完了を確認"
                     art.add_record(rec)
                     art.log(f"手動確認: 完了(作業者: {operator}, 確認時刻: {rec.finished_at})")
-                    console.print(f"  └ 結果: [bold #5fd9a4]✓ Completed[/] (手動確認 {rec.finished_at})")
+                    show_result_line("ok", f"手動確認 {rec.finished_at[11:]}")
                     continue
                 if action == "skip":
                     rec.status = "skipped"
                     rec.detail = "操作者がスキップ"
                     art.add_record(rec)
                     art.log("→ スキップ(操作者判断)")
-                    console.print("[yellow]→ スキップしました[/yellow]")
+                    show_result_line("skipped", "操作者がスキップ")
                     continue
                 rec.status = "skipped"
                 rec.detail = "操作者が中断(手動ステップ未完了)"
                 art.add_record(rec)
                 art.log("→ 操作者が中断(手動ステップ未完了)")
-                console.print("[red]→ 中断しました[/red]")
+                show_result_line("quit", "操作者が中断")
                 show_onfail_guidance(step, art)
                 status = "aborted"
                 exit_code = 130
@@ -428,21 +428,21 @@ def cmd_run(args: argparse.Namespace) -> int:
                     rec.detail = "操作者がスキップ"
                     art.add_record(rec)
                     art.log("→ スキップ(操作者判断)")
-                    console.print("[yellow]→ スキップしました[/yellow]")
+                    show_result_line("skipped", "操作者がスキップ")
                     continue
                 if action == "quit":
                     rec.status = "skipped"
                     rec.detail = "操作者が中断"
                     art.add_record(rec)
                     art.log("→ 操作者が中断")
-                    console.print("[red]→ 中断しました[/red]")
+                    show_result_line("quit", "操作者が中断")
                     status = "aborted"
                     exit_code = 130
                     break
 
             started = datetime.now()
             rec.started_at = started.isoformat(timespec="seconds")
-            console.print(f"  ├ 開始: {started:%Y-%m-%d %H:%M:%S}")
+            tree_item("開始", f"{started:%Y-%m-%d %H:%M:%S}", first=True)
 
             # D5: 逐次書き込み。シグナル中断時にも必ず close する。
             files = art.open_step_files(step.number)
@@ -452,7 +452,7 @@ def cmd_run(args: argparse.Namespace) -> int:
                     # 案R5: stderr は赤。stdout は構造行(ホスト区切り・プレイ見出し・
                     # 失敗行)だけ色を付け、本文は既定のまま流す。
                     style = "red" if is_stderr else output_line_style(text)
-                    console.print(f"  │   {text}", style=style, markup=False)
+                    console.print(Text.assemble((OUTPUT_PREFIX, MUTED), Text(text, style=style or "")))
                     files.write(mask(line), is_stderr)
 
                 result = run_command(step.command, timeout=step.timeout, cwd=step.cwd,
@@ -484,9 +484,9 @@ def cmd_run(args: argparse.Namespace) -> int:
                 rec.status = "error"
                 rec.detail = f"シグナル ({signal.Signals(result.interrupted).name}) により中断"
                 art.log(f"判定: エラー ({rec.detail})")
-                print_tree_item("詳細", rec.detail, style="bold #ff6b60")
-                console.print(f"  └ 結果: [bold #ff6b60]✘ Failed[/] ({result_note})")
-                console.print("[bold red]中断シグナルを受信したため、実行を中断します。[/]")
+                tree_item("詳細", rec.detail, style=NG)
+                show_result_line("error", result_note)
+                notice("中断シグナルを受信したため、実行を中断します。", STYLE_NG)
                 art.add_record(rec)
                 status = "aborted"
                 exit_code = 128 + result.interrupted
@@ -512,24 +512,25 @@ def cmd_run(args: argparse.Namespace) -> int:
                     # 案R2: 1ステップ分は1次元なので表を組まず1行で出す
                     # (run.log と同じ表記になり、5行 → 1行に収まる)
                     line = host_results_logline(rec.host_results)
-                    if len("  ├ ホスト別結果: ") + len(line) <= console.width:
-                        console.print(f"  ├ ホスト別結果: {escape(line)}")
-                    else:  # ホスト数が多く1行に収まらない場合のみ表にフォールバック
-                        console.print("  ├ ホスト別結果:")
-                        print_host_matrix([("", rec.host_results)], indent="  │   ")
                     # 案R3: 凡例は最初のステップだけ(最終マトリックスでも再掲される)
-                    if not legend_shown:
-                        console.print(f"  │   {_MATRIX_LEGEND}")
-                        legend_shown = True
+                    legend = "" if legend_shown else "\n" + _MATRIX_LEGEND
+                    legend_shown = True
+                    if render.VALUE_COLUMN + len(line) <= console.width:
+                        tree_item("ホスト別結果", Text.from_markup(escape(line) + legend))
+                    else:  # ホスト数が多く1行に収まらない場合のみ表にフォールバック
+                        tree_item("ホスト別結果", "")
+                        print_host_matrix([("", rec.host_results)], indent="  │   ")
+                        if legend:
+                            tree_item("", Text.from_markup(legend.strip()))
                     art.log("ホスト別結果: " + line)
 
             art.add_record(rec)
             if rec.status == "ok":
                 art.log("判定: OK")
-                console.print(f"  └ 結果: [bold #5fd9a4]✓ Completed[/] ({result_note})")
+                show_result_line("ok", result_note)
             else:
                 art.log(f"判定: NG ({rec.detail})")
-                print_tree_item("詳細", rec.detail, style="bold #ff6b60")
+                tree_item("詳細", rec.detail, style=NG)
                 # 提案1: 判定の詳細診断(どの条件で落ちたかの内訳)
                 if rec.status == "ng":
                     breakdown = criteria.diagnose(step.criteria, result.rc, result.stdout, result.stderr)
@@ -541,17 +542,22 @@ def cmd_run(args: argparse.Namespace) -> int:
                             {"expr": t, "ok": ok, "evidence": evid[t]} for t, ok in breakdown]
                         # 全角文字を含む条件式でも → の位置を揃えるため表示幅で計算する
                         width = max(cell_len(mask(t)) for t, _ in breakdown)
-                        console.print("  ├ 判定内訳:")
                         art.log("判定内訳:")
-                        for text, ok in breakdown:
-                            mark = "[bold #5fd9a4]OK[/]" if ok else "[bold #ff6b60]NG[/]"
-                            pad = " " * (width - cell_len(mask(text)))
-                            note = f"{pad}  [dim]→ {escape(evid[text])}[/]" if evid[text] else ""
-                            console.print(f"  │   \\[{mark}] {escape(mask(text))}{note}")
+                        rows = Text()
+                        for i, (text, ok) in enumerate(breakdown):
+                            if i:
+                                rows.append("\n")
+                            rows.append("[")
+                            rows.append("OK" if ok else "NG", style=STYLE_OK if ok else STYLE_NG)
+                            rows.append(f"] {mask(text)}")
+                            if evid[text]:
+                                pad = " " * (width - cell_len(mask(text)))
+                                rows.append(f"{pad}  → {evid[text]}", style=MUTED)
                             art.log(f"  [{'OK' if ok else 'NG'}] {text}"
                                     + (f"  → {evid[text]}" if evid[text] else ""))
-                console.print(f"  └ 結果: [bold #ff6b60]✘ Failed[/] ({result_note})")
-                console.print("[bold red]失敗したため、実行を中断します。[/]")
+                        tree_item("判定内訳", rows)
+                show_result_line(rec.status, result_note)
+                notice("失敗したため、実行を中断します。", STYLE_NG)
                 show_onfail_guidance(step, art)  # 提案B: 失敗時ガイダンス
                 status = "aborted"
                 exit_code = 1
@@ -560,48 +566,52 @@ def cmd_run(args: argparse.Namespace) -> int:
             aborted_at = None  # break せず全ステップ走破した(中断位置なし)
     except KeyboardInterrupt:
         art.log("中断されました(SIGINT)")
-        console.print("\n[red]中断されました[/red]")
+        console.print()
+        notice("中断されました", STYLE_NG)
         status = "aborted"
         exit_code = 130
     except SignalInterrupt as e:
         art.log(f"中断されました(シグナル {signal.Signals(e.signum).name})")
-        console.print("\n[red]中断されました[/red]")
+        console.print()
+        notice("中断されました", STYLE_NG)
         status = "aborted"
         exit_code = 128 + e.signum
 
     # 集約マトリックス(host_matrix 有効なステップが2つ以上あるとき)
     matrix_records = [r for r in art.records if r.host_matrix and r.host_results]
     if len(matrix_records) >= 2:
-        console.print()
-        console.print("・ 最終ホスト別結果マトリックス")
+        section_rule("最終ホスト別結果マトリックス")
         print_host_matrix(
             [(f"{r.number}: {r.title}", r.host_results) for r in matrix_records],
             label_header="ステップ",
             indent="  "
         )
-        console.print(f"  └ 記号解説: {_MATRIX_LEGEND}")
+        console.print()
+        tree_item("凡例", Text.from_markup(_MATRIX_LEGEND), bare=True)
 
     log_dir = art.finalize(status)
-    console.print()
     n_skipped = sum(1 for r in art.records if r.status == "skipped")
     if status == "completed":
         if n_skipped:
             lbl = f"完了 (スキップ {n_skipped} ステップあり)"
-            style = "bold #f2b94d"
+            style = STYLE_WARN
         else:
             lbl = "全ステップ正常終了"
-            style = "bold #5fd9a4"
+            style = STYLE_OK
     else:
         lbl = "実行中断"
-        style = "bold #ff6b60"
+        style = STYLE_NG
     # 案R1: 中断時は「どのステップで落ちたか」を1行目で示す(遡って探させない)
     failed = next((r for r in art.records if r.status in ("ng", "error")), None)
     if failed is not None:
         lbl += f" — ステップ {failed.number}「{failed.title}」で{'失敗' if failed.status == 'ng' else 'エラー'}"
-    console.print(f"・ 実行結果: [{style}]{escape(lbl)}[/]")
+    section_rule("実行結果")
+    console.print(Text.assemble("  ", (lbl, style)))
+    console.print()
     # 案R1: ステップ別リザルト一覧(未実行・対象外も明示する)
-    console.print(result_table(steps, art.records, selected, aborted_at))
-    console.print(f"  └ ログ保存先: {log_dir}", markup=False)
+    print_indented(result_table(steps, art.records, selected, aborted_at), "  ")
+    console.print()
+    tree_item("ログ保存先", str(log_dir), bare=True)
     return exit_code
 
 
@@ -742,19 +752,19 @@ def cmd_check(args: argparse.Namespace) -> int:
     try:
         proc = parser.parse_file(args.file, parse_vars(args.var))
     except parser.ParseError as e:
-        console.print(f"[bold red]NG[/bold red] {e}")
+        console.print(f"[{STYLE_NG}]NG[/] {e}")
         return 1
     errors_, warnings_ = collect_check_diagnostics(proc)
     errors = [d["message"] for d in errors_]
     if errors:
         for e in errors:
-            console.print(f"[bold red]NG[/bold red] {e}")
+            console.print(f"[{STYLE_NG}]NG[/] {e}")
         return 1
     for w in warnings_:
-        console.print(f"[bold yellow]警告[/bold yellow] {escape(w['message'])}")
+        console.print(f"[{STYLE_WARN}]警告[/] {escape(w['message'])}")
     summary = f"{len(proc.steps)} ステップ"
     note = f"(警告 {len(warnings_)} 件)" if warnings_ else ""
-    console.print(f"[bold green]OK[/bold green] {proc.path}: {summary}、書式・基準式に問題ありません{note}")
+    console.print(f"[{STYLE_OK}]OK[/] {proc.path}: {summary}、書式・基準式に問題ありません{note}")
 
     if args.preview:
         mask = make_mask(proc)
@@ -799,13 +809,15 @@ def cmd_renumber(args: argparse.Namespace) -> int:
             out.append(line)
     # D7.3: 手順書ファイルと同じディレクトリ内の一時ファイルへ書いてからアトミックに rename
     atomic_write_text(path, "\n".join(out) + "\n")
-    console.print(f"[bold green]OK[/bold green] {path}: {total} ステップ中 {changed} 見出しを更新しました")
+    console.print(f"[{STYLE_OK}]OK[/] {path}: {total} ステップ中 {changed} 見出しを更新しました")
     return 0
 
 
 def build_argparser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(prog="runbook", description="Markdown手順書 自動実行フレームワーク")
     ap.add_argument("--version", action="version", version=f"runbook {__version__}")
+    ap.add_argument("--no-color", action="store_true",
+                    help="色を付けずに表示する(環境変数 NO_COLOR でも同じ)")
     sub = ap.add_subparsers(dest="subcommand", required=True)
 
     def add_common(p: argparse.ArgumentParser) -> None:
@@ -861,16 +873,20 @@ def main(argv: list[str] | None = None) -> int:
     signal.signal(signal.SIGTERM, _raise_signal_interrupt)
     signal.signal(signal.SIGHUP, _raise_signal_interrupt)
     args = build_argparser().parse_args(argv)
+    if args.no_color:
+        console.no_color = True
     try:
         return args.func(args)
     except (parser.ParseError, ValueError) as e:
-        console.print(f"[bold red]エラー:[/bold red] {e}")
+        console.print(f"[{STYLE_NG}]エラー:[/] {e}")
         return 2
     except KeyboardInterrupt:
-        console.print("\n[red]中断されました[/red]")
+        console.print()
+        notice("中断されました", STYLE_NG)
         return 130
     except SignalInterrupt as e:
-        console.print("\n[red]中断されました[/red]")
+        console.print()
+        notice("中断されました", STYLE_NG)
         return 128 + e.signum
 
 

@@ -362,11 +362,10 @@ rc == 0 and out("active \(running\)") and not out("ERROR|WARN")
 落ちたか**の内訳が表示される(run.log と result.json の `criteria_breakdown` にも記録):
 
 ```
-  ├ 判定内訳:
-  │   [OK] rc == 0
-  │   [OK] out("active")
-  │   [NG] not out("ERROR|FATAL")
-  └ 結果: ✘ Failed (rc=0, 0.01s)
+  ├ 判定内訳     [OK] rc == 0
+  │              [OK] out("active")
+  │              [NG] not out("ERROR|FATAL")
+  └ 結果         ✘ 失敗  (rc=0, 0.01s, 終了 22:42:11)
 ```
 
 - 分解されるのは `and` の結合のみ。`(rc == 0 or rc == 2)` のような or のまとまりや
