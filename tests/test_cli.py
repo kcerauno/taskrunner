@@ -2,6 +2,7 @@
 
 import json
 import os
+import re
 import signal
 import textwrap
 import threading
@@ -802,7 +803,7 @@ def test_sample_output_demo_runs_and_demonstrates_readability(tmp_path, capsys):
     assert "ステップ 5「意図的に失敗するステップ" in out  # 案R1: 失敗ステップ名
     # 案R1: リザルト一覧でステップ6・7が未実行。手順書の説明文にも「未実行」の語が
     # 出てくるため、一覧表の行(先頭が行番号)だけを数える
-    summary = out.split("・ 実行結果:")[-1]
+    summary = out.split("━━ 実行結果 ")[-1]
     assert len([ln for ln in summary.splitlines() if "未実行" in ln]) == 2
     assert "← 中断" in out
     assert "db01=O" in out                                 # 案R2: ホスト別結果の1行表示
@@ -1023,3 +1024,67 @@ def test_check_json_parse_error_reports_line_zero(tmp_path, capsys):
     (diag,) = payload["diagnostics"]
     assert diag["severity"] == "error"
     assert diag["line"] == 0
+
+
+def test_interactive_skip_closes_step_tree(tmp_path, monkeypatch, capsys):
+    """-i のプロンプトとスキップ結果はツリーの中に出し、スキップでも └ 結果 で閉じる"""
+    md = write_md(tmp_path, SIMPLE_MD)
+    feed_input(monkeypatch, ["s"] * 10)
+    cli.main(["run", str(md), "-i", "--yes", "--operator", "山田",
+              "--log-dir", str(tmp_path / "logs")])
+    out = capsys.readouterr().out
+    assert "  ▶ ステップ 1 を実行しますか？" in out
+    assert "  └ 結果         → スキップ" in out
+    assert "スキップしました" not in out
+    # 0桁目から始まる行は罫線だけ(プロンプトやメッセージがツリーに割り込まない)
+    assert all(ln.startswith(("━━", "──", " ")) for ln in out.splitlines() if ln)
+
+
+def test_failure_message_and_onfail_stay_indented(tmp_path, capsys):
+    md = write_md(tmp_path, """\
+        ## 失敗
+
+        ### RB-CMD
+        ```bash
+        echo hello
+        ```
+
+        ### RB-EXPECTED
+        ```
+        rc == 1
+        ```
+
+        ### RB-ONFAIL
+        リーダーへ連絡する。
+    """)
+    rc = cli.main(["run", str(md), "--yes", "--operator", "山田",
+                   "--log-dir", str(tmp_path / "logs")])
+    out = capsys.readouterr().out
+    assert rc == 1
+    assert "  └ 結果         ✘ 失敗" in out
+    assert "Failed" not in out and "Completed" not in out  # 表記は日本語に統一
+    assert "  ┃ リーダーへ連絡する。" in out
+    assert all(ln.startswith(("━━", "──", " ")) for ln in out.splitlines() if ln)
+
+
+def test_manual_step_shows_time_only_and_no_duplicate_tag(tmp_path, monkeypatch, capsys):
+    md = write_md(tmp_path, """\
+        ## 画面の目視確認(手動)
+
+        ### RB-DESCRIPTION
+        確認する。
+    """)
+    feed_input(monkeypatch, ["y"])
+    cli.main(["run", str(md), "--yes", "--operator", "山田", "--log-dir", str(tmp_path / "logs")])
+    out = capsys.readouterr().out
+    assert "(手動)(手動)" not in out
+    m = re.search(r"手動確認 (\S+)\)", out)
+    assert m and re.fullmatch(r"\d\d:\d\d:\d\d", m.group(1))
+
+
+def test_no_color_option(tmp_path, capsys, monkeypatch):
+    md = write_md(tmp_path, SIMPLE_MD)
+    monkeypatch.setattr(cli.console, "no_color", False)
+    cli.main(["--no-color", "run", str(md), "--yes", "--operator", "山田",
+              "--log-dir", str(tmp_path / "logs")])
+    assert cli.console.no_color is True

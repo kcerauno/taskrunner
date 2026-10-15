@@ -10,40 +10,127 @@ from __future__ import annotations
 import re
 
 from rich import box
+from rich.cells import cell_len
 from rich.console import Console
-from rich.markup import escape
 from rich.table import Table
 from rich.text import Text
 
-# soft_wrap: 長い行に強制改行を入れない(tee 等でテキスト保存しても行が崩れない)
+# soft_wrap: 長い行に強制改行を入れない(tee 等でテキスト保存しても行が崩れない)。
+# 端末に出すときだけ tree_item() 側でツリーのインデントを保って折り返す。
+# NO_COLOR 環境変数と --no-color で色を消せる(rich が NO_COLOR を解釈する)。
 console = Console(highlight=False, soft_wrap=True)
 
 MASK = "*****"
 
+# 配色: 意味ごとに5種類だけ使う(1つの色に1つの意味)。
+# 16進カラーは暗い背景前提になり、明るい背景の端末で読めなくなるため、
+# 端末のテーマに追従する名前付き色と dim だけを使う。
+# 太字は見出しと合否(結果・判定)にだけ付ける(多用すると強調が効かなくなる)。
+OK = "green"        # 成功
+NG = "red"          # 失敗・エラー・中断
+WARN = "yellow"     # 注意: スキップ・手動ステップ・到達不能・警告・実行先の変更・失敗時ガイダンス
+ACCENT = "cyan"     # 見出しの罫線・入力プロンプト・実行するコマンド・出力内の見出し
+MUTED = "dim"       # 補足: ツリー記号・ラベル・監査用の控え・凡例
 
-def print_tree_item(header: str, text: str, style: str = "") -> None:
-    lines = text.splitlines()
-    if not lines:
-        return
-    if style:
-        console.print(f"  ├ {header}: [{style}]{escape(lines[0])}[/]")
-        for line in lines[1:]:
-            console.print(f"  │   [{style}]{escape(line)}[/]")
+STYLE_OK = f"bold {OK}"
+STYLE_NG = f"bold {NG}"
+STYLE_WARN = f"bold {WARN}"
+STYLE_PROMPT = f"bold {ACCENT}"
+
+# ステップ表示の配色
+STYLE_CMD = ACCENT              # RB-CMD の原文(何をするか)
+STYLE_FULL_CMD = MUTED          # 組み立て後の実行コマンド全文(監査の控え)
+STYLE_TARGET = "bold"           # どのインベントリ/ホストか(色ではなく太字で目立たせる)
+STYLE_CHANGED = WARN            # 前ステップから実行先が変わった(失敗ではないので赤にしない)
+
+# ツリーのラベル幅(表示幅)。ラベルの長さに関係なく値の開始桁を揃える。
+LABEL_WIDTH = 12
+# ツリーの値の開始桁: "  ├ " (4) + ラベル (LABEL_WIDTH) + 空白 (1)
+VALUE_COLUMN = 4 + LABEL_WIDTH + 1
+# コマンド出力の行頭。ツリーの縦線の内側に、出力専用の縦線(▏)を引いて
+# 説明やコマンドの続き行と見分けられるようにする。
+OUTPUT_PREFIX = "  │ ▏ "
+
+
+def _as_text(value, style: str = "") -> Text:
+    if isinstance(value, Text):
+        return value
+    return Text(str(value), style=style)
+
+
+def _wrap(line: Text, width: int) -> list[Text]:
+    """端末のときだけ、値を指定幅で折り返す(ツリーの縦線を突き破らせない)。
+
+    パイプやファイルへの出力では折り返さない(1行のまま grep・tee できるように)。
+    """
+    if not console.is_terminal or width < 20 or cell_len(line.plain) <= width:
+        return [line]
+    return list(line.wrap(console, width, overflow="fold", no_wrap=False))
+
+
+def tree_item(label: str, value, *, last: bool = False, first: bool = False,
+              bare: bool = False, style: str = "") -> None:
+    """ツリーの1項目を出す。ラベルは固定幅に揃え、複数行の値は値の開始桁で続ける。
+
+    value は文字列(markup は解釈しない)か rich の Text。
+    first=True は見出しを持たないブロックの先頭(┌)。実行ブロックの「開始」で使う。
+    bare=True はツリー記号なし(ツリーに属さない単独の項目)。
+    """
+    text = _as_text(value, style)
+    lines = text.split("\n", allow_blank=True) if text.plain else [Text("")]
+    label_cells = max(LABEL_WIDTH, cell_len(label))
+    if bare:
+        lead = cont_lead = "  "
     else:
-        console.print(f"  ├ {header}: {escape(lines[0])}")
-        for line in lines[1:]:
-            console.print(f"  │   {escape(line)}")
+        lead = "  " + ("└" if last else "┌" if first else "├") + " "
+        cont_lead = "    " if last else "  │ "
+    head = Text.assemble((lead, MUTED), (label + " " * (label_cells - cell_len(label) + 1), MUTED))
+    cont = Text.assemble((cont_lead, MUTED), " " * (label_cells + 1))
+    width = console.width - (len(lead) + label_cells + 1)
+    first = True
+    for line in lines:
+        for seg in _wrap(line, width):
+            console.print(Text.assemble(head if first else cont, seg))
+            first = False
 
 
-# ステップ表示の配色(1つの色に1つの意味だけを持たせる)
-STYLE_TITLE = "bold #cfd3ea"
-STYLE_DESC = "#6f7590"          # 説明は一段落として背景に
-STYLE_CMD = "bold #7ee0ee"      # RB-CMD の原文(何をするか)
-STYLE_FULL_CMD = "#6f7590"      # 組み立て後の実行コマンド全文(監査の控え)
-STYLE_CRITERIA = "bold #8ea7ff"
-STYLE_INVENTORY = "bold #f2b94d"  # どの環境か(取り違えが最も高くつく)
-STYLE_TARGET = "bold #ffa8d8"     # どのホスト/グループか
-STYLE_CHANGED = "bold #ff6b60"    # 前ステップから実行先が変わった
+def _rule(title: Text, char: str, width: int | None = None) -> None:
+    """見出し付きの罫線。タイトルは切り捨てず、余った幅を罫線で埋める。"""
+    width = width or console.width
+    head = Text.assemble((char * 2 + " ", ACCENT), title, " ")
+    fill = max(3, width - cell_len(head.plain))
+    console.print(Text.assemble(head, (char * fill, ACCENT)))
+
+
+def section_rule(title: str) -> None:
+    """大きな区切り(実行前確認・実行開始・最終結果など)。太い罫線。"""
+    console.print()
+    _rule(Text(title, style="bold"), "━")
+
+
+def step_rule(number: int, total: int, title: str) -> None:
+    """ステップの区切り。ステップ番号とタイトルを罫線に埋め込む。"""
+    console.print()
+    _rule(Text.assemble((f"ステップ {number}/{total}", f"bold {ACCENT}"), "  ", (title, "bold")), "─")
+
+
+def print_indented(renderable, indent: str = "  ") -> None:
+    """表などを左に indent を付けて出す(ツリーと左端を揃える)。"""
+    with console.capture() as cap:
+        # インデント分を差し引いた幅で組む(右端からはみ出して折り返させない)
+        console.print(renderable, width=max(20, console.width - cell_len(indent)))
+    for line in cap.get().splitlines():
+        console.print(Text.from_ansi(indent + line) if "\x1b" in line else Text(indent + line))
+
+
+def prompt(message: str, style: str = STYLE_PROMPT) -> None:
+    """入力プロンプト(改行しない)。ツリーと同じ左端から出す。"""
+    console.print(Text.assemble("  ", ("▶ " + message, style), " > "), end="")
+
+
+def notice(message: str, style: str = NG) -> None:
+    """ツリーの外に出すメッセージ(中断・エラー)。値の開始桁に揃えて出す。"""
+    console.print(Text.assemble(" " * VALUE_COLUMN, (message, style)))
 
 
 def target_signature(step) -> tuple[tuple[str, ...], tuple[str, ...]] | None:
@@ -53,7 +140,7 @@ def target_signature(step) -> tuple[tuple[str, ...], tuple[str, ...]] | None:
     return (tuple(step.targets), tuple(step.inventories))
 
 
-def _print_target_line(step, mask, prev_signature) -> None:
+def _target_text(step, mask, prev_signature) -> Text:
     """「対象」行: どのインベントリの、どのホストで実行されるか。
 
     ansible 系はステップごとにインベントリ/ターゲットが変わりうるため、
@@ -66,65 +153,70 @@ def _print_target_line(step, mask, prev_signature) -> None:
     inventories = ", ".join(mask(i) for i in step.inventories) or "(指定なし)"
     signature = target_signature(step)
     if prev_signature is None:
-        mark = f" [{STYLE_DESC}](最初の実行対象)[/]"
+        mark = ("  (最初の実行対象)", MUTED)
     elif prev_signature == signature:
-        mark = f" [{STYLE_DESC}]= 前ステップと同じ[/]"
+        mark = ("  = 前ステップと同じ", MUTED)
     else:
-        mark = f" [{STYLE_CHANGED}]⇄ 前ステップから変更[/]"
-    console.print(
-        f"  ├ 対象: [{STYLE_TARGET}]{escape(targets)}[/] [{STYLE_DESC}]@[/] "
-        f"[{STYLE_INVENTORY}]{escape(inventories)}[/]{mark}"
-    )
+        mark = ("  ⇄ 前ステップから変更", STYLE_CHANGED)
+    return Text.assemble((targets, STYLE_TARGET), (" @ ", MUTED), (inventories, STYLE_TARGET), mark)
+
+
+def _command_text(lines: list[str], prefix: str, kind: str) -> Text:
+    """コマンド行(複数行可)。1行目の後ろに種別を補足として添える。"""
+    text = Text()
+    for i, line in enumerate(lines):
+        if i:
+            text.append("\n")
+        text.append(prefix + line, style=STYLE_CMD)
+        if i == 0:
+            text.append(f"  ({kind})", style=MUTED)
+    return text
 
 
 def show_step_header(step, total: int, mask=lambda t: t, preview: bool = False,
                      prev_signature=None) -> None:
-    """ステップヘッダ・対象・コマンド・正常性基準の表示。
+    """ステップの区切り罫線と「計画」ブロック(説明・対象・コマンド・正常性基準)。
 
     表示順は 説明 → 対象 → コマンド → 実行コマンド → 正常性基準。
     run の実行時ステップ表示と check --preview の第2部(D2)で共用する。
+    計画ブロックはここで └ で閉じる。実行結果は空行を挟んだ別ブロックに出す
+    (「何をするか」と「何が起きたか」を形で分ける)。
     prev_signature は直前の ansible 系ステップの target_signature()。
     None を渡すと「最初の実行対象」として扱う(比較対象がない)。
 
     preview=True の手動ステップは、まだ実行していないことを明示するため
     「上記の作業を実施してください」ではなく「作業者の完了確認のみ」と表示する。
     """
-    console.print()
-    console.print(f"・ ステップ {step.number}/{total}: [{STYLE_TITLE}]{escape(step.title)}[/]")
+    step_rule(step.number, total, step.title)
     if step.description:
-        print_tree_item("説明", step.description, style=STYLE_DESC)
+        tree_item("説明", step.description)
     if step.runner == "manual":
-        if preview:
-            console.print("  └ [bold #f2b94d]手動ステップ[/](作業者の完了確認のみ)")
-        else:
-            console.print("  └ [bold #f2b94d]手動ステップ[/](コマンドなし。上記の作業を実施してください)")
+        note = "作業者の完了確認のみ" if preview else "コマンドなし。上記の作業を実施してください"
+        tree_item("手動ステップ", note, last=True, style=WARN)
         return
     if step.runner in ("ansible", "playbook"):
-        _print_target_line(step, mask, prev_signature)
+        tree_item("対象", _target_text(step, mask, prev_signature))
     if step.runner == "ansible":
-        console.print(f"  ├ [bold]コマンド[/] [{STYLE_DESC}](ansible ad-hoc / shellモジュール)[/]")
-        for line in mask(step.remote_command).splitlines():
-            console.print(f"  │   [{STYLE_CMD}]$ {escape(line)}[/]")
-        print_tree_item("実行コマンド", mask(step.command), style=STYLE_FULL_CMD)
+        tree_item("コマンド", _command_text(mask(step.remote_command).splitlines(), "$ ",
+                                            "ansible ad-hoc / shellモジュール"))
+        tree_item("実行コマンド", mask(step.command), style=STYLE_FULL_CMD)
     elif step.runner == "playbook":
-        console.print(f"  ├ [bold]プレイブック[/] [{STYLE_DESC}](ansible-playbook)[/]")
-        for line in mask(step.remote_command).splitlines():
-            console.print(f"  │   [{STYLE_CMD}]{escape(line)}[/]")
-        print_tree_item("実行コマンド", mask(step.command), style=STYLE_FULL_CMD)
+        tree_item("プレイブック", _command_text(mask(step.remote_command).splitlines(), "",
+                                                "ansible-playbook"))
+        tree_item("実行コマンド", mask(step.command), style=STYLE_FULL_CMD)
     else:
-        console.print(f"  ├ [bold]コマンド[/] [{STYLE_DESC}](bash)[/]")
-        for line in mask(step.command).splitlines():
-            console.print(f"  │   [{STYLE_CMD}]$ {escape(line)}[/]")
-    print_tree_item("正常性基準", mask(step.criteria), style=STYLE_CRITERIA)
+        tree_item("コマンド", _command_text(mask(step.command).splitlines(), "$ ", "bash"))
+    tree_item("正常性基準", mask(step.criteria), last=True)
 
 
 # ホスト別結果マトリックスのマーク: 状態 → (表示文字, スタイル)
 _MATRIX_MARKS = {
-    "ok": ("O", "bold #5fd9a4"),
-    "failed": ("X", "bold #ff6b60"),
-    "unreachable": ("!", "bold #f2b94d"),
+    "ok": ("O", STYLE_OK),
+    "failed": ("X", STYLE_NG),
+    "unreachable": ("!", STYLE_WARN),
 }
-_MATRIX_LEGEND = "[bold #5fd9a4]O[/]=成功  [bold #ff6b60]X[/]=失敗  [bold #f2b94d]![/]=到達不能  [dim]-[/]=対象外"
+_MATRIX_LEGEND = (f"[{STYLE_OK}]O[/]=成功  [{STYLE_NG}]X[/]=失敗  "
+                  f"[{STYLE_WARN}]![/]=到達不能  [{MUTED}]-[/]=対象外")
 _LOG_MARKS = {
     "ok": "O",
     "failed": "X",
@@ -139,17 +231,23 @@ def print_host_matrix(rows: list[tuple[str, dict]], label_header: str = "", inde
     複数行ならステップ×ホストの集約マトリックス。
     """
     hosts = sorted({h for _, results in rows for h in results})
+    # ホスト列(ホスト名 + 左右の余白 + 区切り)を確保した残りをステップ名の列に充てる
+    label_width = max(8, console.width - cell_len(indent)
+                      - sum(cell_len(h) + 3 for h in hosts) - 1)
     table = Table(
         box=box.SIMPLE,
-        border_style="#4a4f78",
-        header_style="bold #cfd3ea",
+        border_style=MUTED,
+        header_style="bold",
         # show_edge=False: 表の上下に入る空行を落とす(1表あたり2行の削減)
         pad_edge=False,
         show_edge=False,
     )
-    table.add_column(label_header, style="bold", overflow="fold")
+    # 行ラベル(ステップ名)は折り返さない。折り返すとデータのない行ができて
+    # 表が崩れるため。幅が足りないときは末尾を省略する(全文は実行結果の一覧にある)。
+    table.add_column(label_header, no_wrap=True, overflow="ellipsis", max_width=label_width)
     for host in hosts:
-        table.add_column(Text(host), justify="center")
+        # ホスト名は省略させない(幅が足りないときはステップ名の側を省略する)
+        table.add_column(Text(host), justify="center", no_wrap=True, min_width=cell_len(host))
     for label, results in rows:
         cells = [Text(label)]
         for host in hosts:
@@ -157,10 +255,7 @@ def print_host_matrix(rows: list[tuple[str, dict]], label_header: str = "", inde
             cells.append(Text(mark, style=style))
         table.add_row(*cells)
 
-    with console.capture() as cap:
-        console.print(table)
-    for line in cap.get().splitlines():
-        console.print(f"{indent}{line}", markup=False)
+    print_indented(table, indent)
 
 
 # 案R5: コマンド出力のうち「構造を示す行」を判別して強調するためのパターン。
@@ -179,11 +274,11 @@ def output_line_style(text: str) -> str | None:
     パターンが外れても表示が地味になるだけで害はない。
     """
     if _OUT_HOST_NG_RE.match(text) or _OUT_RECAP_NG_RE.search(text):
-        return "bold #ff6b60"
+        return STYLE_NG
     if _OUT_HOST_OK_RE.match(text):
-        return "bold #5fd9a4"
+        return STYLE_OK
     if _OUT_PLAY_HEAD_RE.match(text):
-        return "bold #8ea7ff"
+        return f"bold {ACCENT}"
     return None
 
 
@@ -193,14 +288,19 @@ def host_results_logline(results: dict) -> str:
 
 # 最終リザルト一覧の状態表示: StepRecord.status → (表示ラベル, スタイル)
 _RESULT_LABELS = {
-    "ok": ("✓ 完了", "bold #5fd9a4"),
-    "ng": ("✘ 失敗", "bold #ff6b60"),
-    "error": ("✘ エラー", "bold #ff6b60"),
-    "skipped": ("→ スキップ", "bold #f2b94d"),
+    "ok": ("✓ 完了", STYLE_OK),
+    "ng": ("✘ 失敗", STYLE_NG),
+    "error": ("✘ エラー", STYLE_NG),
+    "skipped": ("→ スキップ", STYLE_WARN),
 }
 # 記録が残っていない場合の状態(選択されていたが中断で到達しなかった / 実行対象外)
-_RESULT_NOT_RUN = ("- 未実行", "dim")
-_RESULT_EXCLUDED = ("- 対象外", "dim")
+_RESULT_NOT_RUN = ("- 未実行", MUTED)
+_RESULT_EXCLUDED = ("- 対象外", MUTED)
+
+
+def result_label(status: str) -> tuple[str, str]:
+    """StepRecord.status → (表示ラベル, スタイル)。ステップの結果行と一覧表で共用する。"""
+    return _RESULT_LABELS.get(status, (status, ""))
 
 
 def result_table(steps, records, selected: set[int], aborted_at: int | None = None) -> Table:
@@ -213,32 +313,27 @@ def result_table(steps, records, selected: set[int], aborted_at: int | None = No
     """
     by_number = {r.number: r for r in records}
     # show_edge=False: box.SIMPLE が表の上下に入れる空行を落として詰める
-    table = Table(box=box.SIMPLE, border_style="#4a4f78", header_style="bold #cfd3ea",
+    table = Table(box=box.SIMPLE, border_style=MUTED, header_style="bold",
                   pad_edge=False, show_edge=False)
     table.add_column("No.", justify="right")
     table.add_column("ステップ", overflow="fold")
     table.add_column("結果")
     table.add_column("rc", justify="right")
     table.add_column("所要", justify="right")
-    table.add_column("")  # 中断位置の注記
     for s in steps:
         rec = by_number.get(s.number)
         if rec is None:
             label, style = _RESULT_NOT_RUN if s.number in selected else _RESULT_EXCLUDED
             rc_text = duration_text = "-"
         else:
-            label, style = _RESULT_LABELS.get(rec.status, (rec.status, ""))
+            label, style = result_label(rec.status)
             rc_text = "-" if rec.rc is None else str(rec.rc)
             duration_text = "-" if rec.duration is None else f"{rec.duration}s"
-        note = "← 中断" if aborted_at is not None and s.number == aborted_at else ""
-        table.add_row(
-            str(s.number),
-            Text(s.title),
-            Text(label, style=style),
-            rc_text,
-            duration_text,
-            Text(note, style="bold #ff6b60"),
-        )
+        result = Text(label, style=style)
+        # 中断位置の注記は「結果」列に添える(見出しのない列を作らない)
+        if aborted_at is not None and s.number == aborted_at:
+            result.append(" ← 中断", style=STYLE_NG)
+        table.add_row(str(s.number), Text(s.title), result, rc_text, duration_text)
     return table
 
 
