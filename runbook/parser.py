@@ -63,6 +63,8 @@ from pathlib import Path
 
 import yaml
 
+from .executor import ANSIBLE_RC_SUFFIX
+
 DEFAULT_CRITERIA = "rc == 0"
 
 # 認識するサブセクション名(小文字化して照合するため小文字で定義)。
@@ -390,7 +392,9 @@ def _resolve_ansible_command(step: Step, defaults: dict, variables: dict[str, st
         step.inventories = [inventory]
     if extra_args:
         parts.append(extra_args)
-    parts += ["-m", "shell", "-a", shlex.quote(step.remote_command)]
+    # リモートの rc を出力に書き出して exit 0 する後置きを付ける。ansible には失敗と
+    # 判定させず、合否は RB-EXPECTED をホストごとに評価して決める(executor.judge_ansible_hosts)
+    parts += ["-m", "shell", "-a", shlex.quote(step.remote_command + ANSIBLE_RC_SUFFIX)]
     step.command = " ".join(parts)
 
 

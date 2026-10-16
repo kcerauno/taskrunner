@@ -17,6 +17,7 @@ runbook run samples/output_demo.md -y --operator デモ --checker デモ
 | ホスト別結果の1行表示(`db01=O web01=O`) | 2・4 |
 | 記号の凡例が最初の1回だけ出る | 2 に出て、4 では繰り返さない |
 | 出力行の色分け(ホスト区切り・`PLAY`/`TASK`・失敗行) | 2・3・4 |
+| ansible のホストごとの判定(リモートの終了コード 1 を正常扱い) | 4 |
 | 判定内訳に「実際の出力はどうだったか」が付く | 5(失敗するステップ) |
 | 失敗時ガイダンス(RB-ONFAIL) | 5 |
 | 最終サマリーが失敗ステップ名を示す | 末尾 |
@@ -55,7 +56,8 @@ rc == 0 and out("demo start")
 ### RB-DESCRIPTION
 ホスト別結果が `db01=O db02=O ...` の1行で出る(表を組まない)。
 記号の凡例はこのステップにだけ出て、後続では繰り返さない。
-出力の `web01 | CHANGED | rc=0 >>` というホスト区切り行が緑になる。
+出力の `web01 | CHANGED | rc=0 >>` というホスト区切り行が太字になり、
+各ホストの出力の後に `(リモートの終了コード: 0)` が出る。
 
 ### RB-LOCALDEF
 ```yaml
@@ -73,7 +75,7 @@ echo "{{CHECK_LABEL}}: host={{ inventory_hostname }}"
 
 ### RB-EXPECTED
 ```
-rc == 0 and out("host=web01") and out("host=db01") and out("host=mon01") and
+rc == 0 and all_out("host=web01") and all_out("host=db01") and all_out("host=mon01") and
 not out("UNREACHABLE|FAILED")
 ```
 
@@ -101,13 +103,14 @@ timeout: 120
 rc == 0 and out("HOGE=DEMO") and not out("failed=[1-9]|unreachable=[1-9]")
 ```
 
-## 4. ansible: 一部ホストが失敗(想定内なのでステップは完了する)
+## 4. ansible: 終了コード 1 を正常として扱う(ホストごとの判定)
 
 ### RB-DESCRIPTION
-db 系2ホストだけコマンドが失敗する。ホスト別結果に `X` が出て、
-出力の `db01 | FAILED | rc=1 >>` が赤くなる。
-「一部ホストの失敗を想定内として次に進む」書き方の例でもあるので、
-基準式は rc=2(一部失敗)を許容している。凡例はここでは繰り返さない。
+db 系2ホストで `test -f` が終了コード 1 を返す。ansible ad-hoc ステップの
+RB-EXPECTED はホストごとにリモートコマンドの終了コードで評価されるので、
+`rc == 0 or rc == 1` と書けば diff / grep / test のように 1 を返すコマンドも
+正常として扱える。出力には `(リモートの終了コード: 1)` が出て、ホスト別結果は `O` になる。
+凡例はここでは繰り返さない。
 
 ### RB-LOCALDEF
 ```yaml
@@ -125,8 +128,7 @@ test -f /nonexistent-path-for-demo
 
 ### RB-EXPECTED
 ```
-rc == 2 and out("db01 \| FAILED") and out("db02 \| FAILED") and
-not out("UNREACHABLE")
+rc == 0 or rc == 1
 ```
 
 ## 5. 意図的に失敗するステップ(判定内訳と失敗時ガイダンス)

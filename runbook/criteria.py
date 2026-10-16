@@ -9,6 +9,13 @@
     out("正規表現")     : 標準出力に正規表現がマッチすれば True
     err("正規表現")     : 標準エラーに正規表現がマッチすれば True
     match("正規表現")   : 標準出力+標準エラーを対象に検索
+    all_stdout          : ansible ad-hoc ステップで全ホスト分の出力全文 (str)
+    all_out("正規表現") : 全ホスト分の出力に正規表現がマッチすれば True
+
+ansible ad-hoc ステップでは基準式をホストごとに評価し、rc / stdout / out() は
+そのホストのリモートコマンドの終了コードと出力を指す。どのホストに実行されたか
+など、ホストをまたぐ条件は all_out() / all_stdout で書く。それ以外のステップでは
+all_stdout / all_out() は stdout / out() と同じ。
 
 演算: and / or / not / == != < <= > >= / in / not in / ( )
 
@@ -44,7 +51,8 @@ def validate(expr: str) -> None:
     evaluate(expr, rc=0, stdout="", stderr="", _validate_only=True)
 
 
-def diagnose(expr: str, rc: int, stdout: str, stderr: str) -> list[tuple[str, bool]]:
+def diagnose(expr: str, rc: int, stdout: str, stderr: str,
+             all_stdout: str | None = None) -> list[tuple[str, bool]]:
     """判定の詳細診断: 基準式を and / or の結合単位に分解し、
     各条件の原文と真偽を [(条件式, True/False), ...] で返す。
 
@@ -81,7 +89,7 @@ def diagnose(expr: str, rc: int, stdout: str, stderr: str) -> list[tuple[str, bo
         text = ast.get_source_segment(src, node) or ast.unparse(node)
         text = " ".join(text.split())  # 複数行の条件は1行に整形
         try:
-            ok = evaluate(text, rc, stdout, stderr)
+            ok = evaluate(text, rc, stdout, stderr, all_stdout=all_stdout)
         except CriteriaError:
             continue
         results.append((text, ok))
@@ -109,7 +117,8 @@ def _regex_evidence(pattern: str, label: str, text: str, max_len: int) -> str:
     return f"{label} の{count} (初出 L{lineno}: {content})"
 
 
-def term_evidence(expr: str, rc: int, stdout: str, stderr: str, max_len: int = 60) -> str:
+def term_evidence(expr: str, rc: int, stdout: str, stderr: str, max_len: int = 60,
+                  all_stdout: str | None = None) -> str:
     """条件式1つについて「実際の出力はどうだったか」を返す(案R6)。
 
     判定内訳が「どの条件で落ちたか」までしか示さないため、
@@ -130,6 +139,7 @@ def term_evidence(expr: str, rc: int, stdout: str, stderr: str, max_len: int = 6
         "out": ("stdout", stdout),
         "err": ("stderr", stderr),
         "match": ("stdout+stderr", stdout + "\n" + stderr),
+        "all_out": ("全ホストの stdout", stdout if all_stdout is None else all_stdout),
     }
     parts: list[str] = []
     seen: set = set()
@@ -151,7 +161,8 @@ def term_evidence(expr: str, rc: int, stdout: str, stderr: str, max_len: int = 6
     return " / ".join(p for p in parts if p)
 
 
-def evaluate(expr: str, rc: int, stdout: str, stderr: str, _validate_only: bool = False) -> bool:
+def evaluate(expr: str, rc: int, stdout: str, stderr: str, _validate_only: bool = False,
+             all_stdout: str | None = None) -> bool:
     try:
         # 括弧で包むことで複数行の式も許容する。
         # 正規表現用の \| \d などを文字列内にそのまま書けるよう、
@@ -163,7 +174,9 @@ def evaluate(expr: str, rc: int, stdout: str, stderr: str, _validate_only: bool 
     except SyntaxError as e:
         raise CriteriaError(f"基準式の構文エラー: {e.msg} (式: {expr!r})") from e
 
-    names = {"rc": rc, "exit_code": rc, "stdout": stdout, "stderr": stderr}
+    if all_stdout is None:
+        all_stdout = stdout
+    names = {"rc": rc, "exit_code": rc, "stdout": stdout, "stderr": stderr, "all_stdout": all_stdout}
 
     def regex(pattern: str, target: str) -> bool:
         try:
@@ -175,6 +188,7 @@ def evaluate(expr: str, rc: int, stdout: str, stderr: str, _validate_only: bool 
         "out": lambda p: regex(p, stdout),
         "err": lambda p: regex(p, stderr),
         "match": lambda p: regex(p, stdout + "\n" + stderr),
+        "all_out": lambda p: regex(p, all_stdout),
     }
 
     def ev(node: ast.AST):
@@ -207,7 +221,7 @@ def evaluate(expr: str, rc: int, stdout: str, stderr: str, _validate_only: bool 
             return True
         if isinstance(node, ast.Call):
             if not isinstance(node.func, ast.Name) or node.func.id not in funcs:
-                raise CriteriaError("使用できる関数は out() / err() / match() のみです")
+                raise CriteriaError("使用できる関数は out() / err() / match() / all_out() のみです")
             if len(node.args) != 1 or node.keywords:
                 raise CriteriaError(f"{node.func.id}() の引数は正規表現文字列 1 つです")
             arg = node.args[0]
@@ -224,7 +238,7 @@ def evaluate(expr: str, rc: int, stdout: str, stderr: str, _validate_only: bool 
         if isinstance(node, ast.Name):
             if node.id in names:
                 return names[node.id]
-            raise CriteriaError(f"使用できない名前です: {node.id} (使用可能: rc, exit_code, stdout, stderr)")
+            raise CriteriaError(f"使用できない名前です: {node.id} (使用可能: rc, exit_code, stdout, stderr, all_stdout)")
         if isinstance(node, ast.Constant):
             if isinstance(node.value, (int, float, str, bool)) or node.value is None:
                 return node.value

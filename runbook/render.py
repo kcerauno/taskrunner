@@ -15,6 +15,8 @@ from rich.console import Console
 from rich.table import Table
 from rich.text import Text
 
+from .executor import ANSIBLE_RC_SUFFIX
+
 # soft_wrap: 長い行に強制改行を入れない(tee 等でテキスト保存しても行が崩れない)。
 # 端末に出すときだけ tree_item() 側でツリーのインデントを保って折り返す。
 # NO_COLOR 環境変数と --no-color で色を消せる(rich が NO_COLOR を解釈する)。
@@ -199,7 +201,8 @@ def show_step_header(step, total: int, mask=lambda t: t, preview: bool = False,
     if step.runner == "ansible":
         tree_item("コマンド", _command_text(mask(step.remote_command).splitlines(), "$ ",
                                             "ansible ad-hoc / shellモジュール"))
-        tree_item("実行コマンド", mask(step.command), style=STYLE_FULL_CMD)
+        # リモート rc 受け取り用の後置き(ANSIBLE_RC_SUFFIX)は内部処理なので表示から外す
+        tree_item("実行コマンド", mask(step.command.replace(ANSIBLE_RC_SUFFIX, "")), style=STYLE_FULL_CMD)
     elif step.runner == "playbook":
         tree_item("プレイブック", _command_text(mask(step.remote_command).splitlines(), "",
                                                 "ansible-playbook"))
@@ -266,13 +269,19 @@ _OUT_PLAY_HEAD_RE = re.compile(r"^(PLAY|TASK|PLAY RECAP)\b")
 _OUT_RECAP_NG_RE = re.compile(r"\b(failed|unreachable)=[1-9]")
 
 
-def output_line_style(text: str) -> str | None:
+def output_line_style(text: str, neutral_hosts: bool = False) -> str | None:
     """コマンド出力1行の表示スタイルを返す(案R5)。None は既定のまま。
 
     文字は一切変えず、構造(ホストの切り替わり・プレイの区切り・失敗行)だけを
     色で浮かび上がらせる。判定に使う値そのものではないので、
     パターンが外れても表示が地味になるだけで害はない。
+
+    neutral_hosts=True(RB-EXPECTED をホストごとに評価する ansible ad-hoc ステップ)では、
+    ホスト区切り行を成否の色でなく太字にする。合否は ansible の CHANGED/FAILED ではなく
+    基準式の評価で決まるため、緑/赤にするとホスト別結果と食い違って見える。
     """
+    if neutral_hosts and (_OUT_HOST_OK_RE.match(text) or _OUT_HOST_NG_RE.match(text)):
+        return "bold"
     if _OUT_HOST_NG_RE.match(text) or _OUT_RECAP_NG_RE.search(text):
         return STYLE_NG
     if _OUT_HOST_OK_RE.match(text):
@@ -328,6 +337,11 @@ def result_table(steps, records, selected: set[int], aborted_at: int | None = No
         else:
             label, style = result_label(rec.status)
             rc_text = "-" if rec.rc is None else str(rec.rc)
+            if rec.host_rc:
+                # ホストごとに判定した ansible ステップは、ansible 自体の rc ではなく
+                # リモートコマンドの rc(重複除く)を出す。判定に使った値と揃えるため
+                vals = sorted({v for v in rec.host_rc.values() if v is not None})
+                rc_text = ",".join(map(str, vals)) or "-"
             duration_text = "-" if rec.duration is None else f"{rec.duration}s"
         result = Text(label, style=style)
         # 中断位置の注記は「結果」列に添える(見出しのない列を作らない)

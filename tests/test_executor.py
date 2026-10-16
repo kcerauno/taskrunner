@@ -3,7 +3,15 @@ import signal
 import threading
 import time
 
-from runbook.executor import parse_ansible_host_results, run_command
+import pytest
+
+from runbook import criteria
+from runbook.executor import (
+    judge_ansible_hosts,
+    parse_ansible_host_results,
+    run_command,
+    split_ansible_host_blocks,
+)
 
 
 def test_parse_ansible_host_results():
@@ -112,3 +120,101 @@ def test_signal_interrupt_forwarded_to_child(tmp_path):
     assert r.interrupted == signal.SIGTERM
     assert duration < 3
     assert signal.getsignal(signal.SIGTERM) is original
+
+
+# ---- ansible ad-hoc のホストごとの判定 ----
+
+# リモートコマンドの末尾に付けた目印(__RUNBOOK_RC=N__)を含む ad-hoc 出力。
+# shell モジュールは stdout 末尾の改行を落とし、stderr を直結して表示する。
+ADHOC_OUTPUT = """\
+web01 | CHANGED | rc=0 >>
+same
+__RUNBOOK_RC=0__
+web02 | CHANGED | rc=0 >>
+1c1
+< a
+---
+> b
+__RUNBOOK_RC=1__
+db01 | CHANGED | rc=0 >>
+__RUNBOOK_RC=2__diff: /nonexist: No such file or directory
+"""
+
+
+def _by_host(judges):
+    return {j.host: j for j in judges}
+
+
+def test_judge_uses_remote_rc_per_host():
+    j = _by_host(judge_ansible_hosts("rc == 0 or rc == 1", ADHOC_OUTPUT, ""))
+    assert (j["web01"].status, j["web01"].rc) == ("ok", 0)
+    assert (j["web02"].status, j["web02"].rc) == ("ok", 1)
+    assert (j["db01"].status, j["db01"].rc) == ("failed", 2)
+
+
+def test_judge_default_criteria_fails_on_nonzero_remote_rc():
+    j = _by_host(judge_ansible_hosts("rc == 0", ADHOC_OUTPUT, ""))
+    assert [h for h, v in j.items() if v.status == "ok"] == ["web01"]
+
+
+def test_judge_host_output_excludes_header_and_marker():
+    j = _by_host(judge_ansible_hosts("rc == 0", ADHOC_OUTPUT, ""))
+    assert j["web01"].output == "same"
+    # stderr が目印の直後に連結されても、目印だけを取り除く
+    assert j["db01"].output == "diff: /nonexist: No such file or directory"
+
+
+def test_judge_out_is_per_host_and_all_out_is_whole_output():
+    expr = 'out("1c1")'
+    j = _by_host(judge_ansible_hosts(expr, ADHOC_OUTPUT, ""))
+    assert {h: v.status for h, v in j.items()} == {"web01": "failed", "web02": "ok", "db01": "failed"}
+    j = _by_host(judge_ansible_hosts('all_out("1c1") and not all_out("__RUNBOOK_RC")', ADHOC_OUTPUT, ""))
+    assert all(v.status == "ok" for v in j.values())
+
+
+def test_judge_marker_glued_to_stdout_without_newline():
+    out = "web01 | CHANGED | rc=0 >>\nno-newline__RUNBOOK_RC=3__\n"
+    [j] = judge_ansible_hosts("rc == 3", out, "")
+    assert (j.status, j.rc, j.output) == ("ok", 3, "no-newline")
+
+
+def test_judge_falls_back_to_header_rc_without_marker():
+    # set -e や exit で目印の前に抜けた場合は ansible の見出しの rc を使う
+    out = "web01 | FAILED | rc=4 >>\nboom\nnon-zero return code\n"
+    [j] = judge_ansible_hosts("rc == 0", out, "")
+    assert (j.status, j.rc) == ("failed", 4)
+
+
+def test_judge_unreachable_and_module_error_fail_without_evaluating():
+    out = """\
+bad | UNREACHABLE! => {
+    "changed": false,
+    "unreachable": true
+}
+db01 | FAILED! => {
+    "msg": "module failure"
+}
+"""
+    # 基準式が常に真でも失敗扱い(コマンドが実行されていないため)
+    j = _by_host(judge_ansible_hosts("True", out, ""))
+    assert (j["bad"].status, j["bad"].reason) == ("unreachable", "到達不能")
+    assert j["db01"].status == "failed" and j["db01"].rc is None
+    assert '"msg": "module failure"' in j["db01"].output
+
+
+def test_judge_returns_empty_without_host_blocks():
+    assert judge_ansible_hosts("rc == 0", "[WARNING]: No hosts matched\n", "") == []
+
+
+def test_judge_propagates_criteria_error():
+    with pytest.raises(criteria.CriteriaError):
+        judge_ansible_hosts("unknown_name == 0", ADHOC_OUTPUT, "")
+
+
+def test_split_blocks_oneline_mode():
+    # -o(1行表示)でも見出しと目印を拾える
+    out = 'web01 | CHANGED | rc=0 | (stdout) x\\n__RUNBOOK_RC=1__\n'
+    [(host, raw, header_rc, body)] = split_ansible_host_blocks(out)
+    assert (host, raw, header_rc) == ("web01", "CHANGED", 0)
+    [j] = judge_ansible_hosts("rc == 1", out, "")
+    assert j.status == "ok"

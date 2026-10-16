@@ -18,6 +18,8 @@ import threading
 import time
 from dataclasses import dataclass, field
 
+from . import criteria
+
 
 @dataclass
 class ExecResult:
@@ -46,8 +48,9 @@ class StepRecord:
     stdout: str = ""
     stderr: str = ""
     host_results: dict = field(default_factory=dict)  # ansibleステップ: ホスト名 → ok/failed/unreachable
+    host_rc: dict = field(default_factory=dict)  # ansibleステップ: ホスト名 → リモートコマンドの終了コード(不明は None)
     host_matrix: bool = False  # マトリックス表示が有効なステップか
-    criteria_breakdown: list = field(default_factory=list)  # NG時の判定内訳: [{"expr": 条件式, "ok": bool}]
+    criteria_breakdown: list = field(default_factory=list)  # NG時の判定内訳: [{"expr": 条件式, "ok": bool, "host": ホスト名}]
 
     def as_dict(self) -> dict:
         d = self.__dict__.copy()
@@ -85,6 +88,84 @@ def parse_ansible_host_results(output: str) -> dict[str, str]:
         else:
             results[host] = "ok"
     return results
+
+
+# ansible ad-hoc ステップでリモートコマンドの終了コードを受け取るための目印。
+# parser がリモートコマンドの末尾に ANSIBLE_RC_SUFFIX を付け足し、リモートの rc を
+# 出力に書き出したうえで exit 0 する(ansible 自身には失敗と判定させない)。
+# shell モジュールは stdout 末尾の改行を落とし stderr を直結して表示するため、
+# 目印は前後を __ で挟み、行頭・行末に依存せず検出できるようにしている。
+ANSIBLE_RC_MARKER_RE = re.compile(r"__RUNBOOK_RC=(-?\d+)__")
+ANSIBLE_RC_SUFFIX = '\n__runbook_rc=$?; echo "__RUNBOOK_RC=${__runbook_rc}__"; exit 0'
+
+# ホスト別ブロックの見出し行: "web01 | CHANGED | rc=0 >>" / "db01 | FAILED! => {" など
+_HOST_HEADER_RE = re.compile(
+    r"^(\S+) \| (CHANGED|SUCCESS|FAILED|UNREACHABLE|SKIPPED)!?(?: \| rc=(-?\d+))?(.*)$",
+    re.MULTILINE,
+)
+
+
+@dataclass
+class HostJudge:
+    """ansible ad-hoc ステップの1ホスト分の判定結果"""
+    host: str
+    status: str  # ok / failed / unreachable / skipped
+    rc: int | None  # リモートコマンドの終了コード(不明は None)
+    output: str  # そのホストの出力(見出し行と rc の目印を除いたもの)
+    reason: str = ""  # failed / unreachable の理由(基準NG 以外のとき)
+
+
+def split_ansible_host_blocks(stdout: str) -> list[tuple[str, str, int | None, str]]:
+    """ansible ad-hoc の出力をホストごとのブロックに分ける。
+
+    戻り値: [(ホスト名, 状態(CHANGED/FAILED/...), 見出しの rc, ブロック本文), ...]
+    ブロック本文は見出し行の残り(`=> {` 以降など)と次の見出しまでの行。
+    """
+    matches = list(_HOST_HEADER_RE.finditer(stdout))
+    blocks = []
+    for i, m in enumerate(matches):
+        end = matches[i + 1].start() if i + 1 < len(matches) else len(stdout)
+        rest = m.group(4)
+        rest = rest[3:] if rest.startswith(" >>") else rest.lstrip(" =>")
+        body = stdout[m.end():end].lstrip("\n")
+        if rest.strip():
+            body = rest.strip() + ("\n" + body if body else "")
+        header_rc = int(m.group(3)) if m.group(3) is not None else None
+        blocks.append((m.group(1), m.group(2), header_rc, body.rstrip("\n")))
+    return blocks
+
+
+def judge_ansible_hosts(expr: str, stdout: str, stderr: str) -> list[HostJudge]:
+    """ansible ad-hoc ステップの正常性基準をホストごとに評価する。
+
+    rc / stdout / out() はそのホストのリモート rc と出力を指す。stderr / err() は
+    ansible プロセスの標準エラー(警告など、ホスト共通)、all_stdout / all_out() は
+    全ホスト分の出力(rc の目印は除く)を指す。
+    到達不能なホストと、rc が分からない失敗(モジュールエラー等)は基準を評価せず失敗とする。
+    ホスト別ブロックが1つも無い場合(インベントリ不正など)は空リストを返すので、
+    呼び出し側は従来どおり ansible プロセスの終了コードで評価する。
+    基準式の誤りは criteria.CriteriaError のまま送出する。
+    """
+    judges: list[HostJudge] = []
+    all_output = ANSIBLE_RC_MARKER_RE.sub("", stdout)
+    for host, raw, header_rc, body in split_ansible_host_blocks(stdout):
+        markers = ANSIBLE_RC_MARKER_RE.findall(body)
+        output = ANSIBLE_RC_MARKER_RE.sub("", body).rstrip("\n")
+        rc = int(markers[-1]) if markers else header_rc
+        if raw == "UNREACHABLE":
+            judges.append(HostJudge(host, "unreachable", None, output, "到達不能"))
+            continue
+        if raw == "SKIPPED":
+            judges.append(HostJudge(host, "skipped", None, output))
+            continue
+        if rc is None:
+            if raw == "FAILED":
+                judges.append(HostJudge(host, "failed", None, output, "ansible がエラーを返しました"))
+                continue
+            rc = 0
+        ok = criteria.evaluate(expr, rc, output, stderr, all_stdout=all_output)
+        judges.append(HostJudge(host, "ok" if ok else "failed", rc, output))
+    return judges
 
 
 def _parse_env_snapshot(data: bytes) -> dict[str, str] | None:

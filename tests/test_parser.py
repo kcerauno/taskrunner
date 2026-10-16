@@ -1,8 +1,15 @@
+import shlex
 import textwrap
 
 import pytest
 
 from runbook import parser
+from runbook.executor import ANSIBLE_RC_SUFFIX
+
+
+def _a(remote: str) -> str:
+    """ad-hoc の -a 引数(リモート rc 受け取り用の後置き付き)を組み立てる"""
+    return shlex.quote(remote + ANSIBLE_RC_SUFFIX)
 
 def write_md(tmp_path, text):
     p = tmp_path / "proc.md"
@@ -313,7 +320,7 @@ def test_ansible_step(tmp_path):
     assert s.remote_command == "systemctl status nginx"
     assert s.command == ("ansible webservers -i hosts.ini "
                          "-e '{\"GROUP\": \"webservers\"}' "
-                         "-m shell -a 'systemctl status nginx'")
+                         "-m shell -a " + _a("systemctl status nginx"))
 
 
 def test_ansible_fence_is_not_text_substituted(tmp_path):
@@ -369,7 +376,7 @@ def test_ansible_step_override_and_extra_args(tmp_path):
         ```
     """)
     s = parser.parse_file(p).steps[0]
-    assert s.command == "ansible db01 -i hosts.ini --become -f 5 -m shell -a uptime"
+    assert s.command == "ansible db01 -i hosts.ini --become -f 5 -m shell -a " + _a("uptime")
 
 
 def test_common_config_inventory_is_error(tmp_path):
@@ -452,7 +459,7 @@ def test_ansible_inline_invocation(tmp_path):
     # 起動指定行は {{VAR}} 置換され、-e JSON は起動指定より前(行内 -e が優先になる並び)
     assert s.command == ("ansible -e '{\"ENV\": \"prod\"}' "
                          "dbservers -i inventories/prod/db.ini -f 3 "
-                         "-m shell -a 'df -h /'")
+                         "-m shell -a " + _a("df -h /"))
 
 
 def test_ansible_inline_invocation_overrides_config(tmp_path):
@@ -478,7 +485,7 @@ def test_ansible_inline_invocation_overrides_config(tmp_path):
     s = parser.parse_file(p).steps[0]
     # 設定側の default.ini / all は使われない
     assert "default.ini" not in s.command
-    assert s.command == "ansible web01 -i web.ini -m shell -a uptime"
+    assert s.command == "ansible web01 -i web.ini -m shell -a " + _a("uptime")
 
 
 def test_ansible_inline_invocation_without_remote_command_is_error(tmp_path):
@@ -796,7 +803,7 @@ def test_ansible_remote_command_quoting(tmp_path):
     import shlex
     argv = shlex.split(s.command)
     assert argv[:3] == ["ansible", "web", "-i"]
-    assert argv[-1] == 'grep -c "error" /var/log/app.log && echo \'done\''
+    assert argv[-1] == 'grep -c "error" /var/log/app.log && echo \'done\'' + ANSIBLE_RC_SUFFIX
 
 
 def test_undefined_var_is_error(tmp_path):

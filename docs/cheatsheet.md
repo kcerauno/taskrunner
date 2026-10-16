@@ -103,6 +103,7 @@ rc == 0 and out("hello")
 | `out("正規表現")` | 標準出力にマッチ |
 | `err("正規表現")` | 標準エラーにマッチ |
 | `match("正規表現")` | 標準出力 + 標準エラーにマッチ |
+| `all_stdout` / `all_out("正規表現")` | ansible ad-hoc で全ホスト分の出力(他は stdout と同じ) |
 
 演算: `and` `or` `not` `==` `!=` `<` `<=` `>` `>=` `in` `not in` `( )`
 
@@ -112,6 +113,14 @@ rc == 0 and out("active \(running\)") and not out("ERROR|WARN")
 ```
 
 文字列内のバックスラッシュ(`\|` `\d` `\(`)はそのまま書ける。
+
+ansible ad-hoc ステップは**ホストごとに評価**する。`rc` / `stdout` / `out()` はそのホストの
+リモートコマンドの終了コードと出力。全ホストが満たせば成功(マトリックスの O/X も同じ評価)。
+
+```
+rc == 0 or rc == 1                    # diff / grep など 1 を正常扱い
+all_out("web01") and not all_out("db01")   # ホストをまたぐ確認は all_out()
+```
 
 ---
 

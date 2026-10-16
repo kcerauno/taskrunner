@@ -31,8 +31,8 @@ echo "host=$(hostname) user=$(id -un)"
 ### RB-EXPECTED
 ```
 rc == 0 and
-out("web01 \| CHANGED") and out("web02 \| CHANGED") and out("web03 \| CHANGED") and
-out("db01 \| CHANGED") and out("db02 \| CHANGED") and out("mon01 \| CHANGED") and
+all_out("web01 \| CHANGED") and all_out("web02 \| CHANGED") and all_out("web03 \| CHANGED") and
+all_out("db01 \| CHANGED") and all_out("db02 \| CHANGED") and all_out("mon01 \| CHANGED") and
 not out("UNREACHABLE|FAILED")
 ```
 
@@ -79,8 +79,8 @@ uptime
 ### RB-EXPECTED
 ```
 rc == 0 and
-out("web01") and out("web02") and out("web03") and
-not out("db01|db02|mon01") and
+all_out("web01") and all_out("web02") and all_out("web03") and
+not all_out("db01|db02|mon01") and
 not out("UNREACHABLE|FAILED")
 ```
 
@@ -106,7 +106,7 @@ df -h /
 
 ### RB-EXPECTED
 ```
-rc == 0 and out("db01 \| CHANGED") and not out(" 100%|UNREACHABLE|FAILED")
+rc == 0 and all_out("db01 \| CHANGED") and not out(" 100%|UNREACHABLE|FAILED")
 ```
 
 ------------------------------------------------------------------------------------
@@ -164,8 +164,8 @@ echo "{{CHECK_LABEL}}: {{ inventory_hostname }} は正常ですよーーーー�
 ### RB-EXPECTED
 ```
 rc == 0 and
-out("定期点検: web01 は正常です") and
-out("定期点検: web02 は正常です") and
-out("定期点検: web03 は正常です") and
+all_out("定期点検: web01 は正常です") and
+all_out("定期点検: web02 は正常です") and
+all_out("定期点検: web03 は正常です") and
 not out("UNREACHABLE|FAILED")
 ```
