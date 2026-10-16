@@ -22,7 +22,7 @@ uptime
 
 ### RB-EXPECTED
 ```
-rc == 0 and out("CHANGED|SUCCESS") and not out("UNREACHABLE|FAILED")
+rc == 0 and all_out("CHANGED|SUCCESS") and not out("UNREACHABLE|FAILED")
 ```
 
 ## DBサーバのディスク確認(RB-LOCALDEF スタイル)

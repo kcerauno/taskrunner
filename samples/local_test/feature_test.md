@@ -48,9 +48,9 @@ echo "{{CHECK_LABEL}}: host={{ inventory_hostname }}"
 ### RB-EXPECTED
 ```
 rc == 0 and
-out("機能テスト: host=web01") and out("機能テスト: host=web02") and
-out("機能テスト: host=web03") and out("機能テスト: host=db01") and
-out("機能テスト: host=db02") and out("機能テスト: host=mon01") and
+all_out("機能テスト: host=web01") and all_out("機能テスト: host=web02") and
+all_out("機能テスト: host=web03") and all_out("機能テスト: host=db01") and
+all_out("機能テスト: host=db02") and all_out("機能テスト: host=mon01") and
 not out("UNREACHABLE|FAILED")
 ```
 
@@ -75,8 +75,8 @@ uptime
 
 ### RB-EXPECTED
 ```
-rc == 0 and out("web01") and out("web02") and out("web03") and
-not out("db01|db02|mon01") and not out("UNREACHABLE|FAILED")
+rc == 0 and all_out("web01") and all_out("web02") and all_out("web03") and
+not all_out("db01|db02|mon01") and not out("UNREACHABLE|FAILED")
 ```
 
 ## 3. playbook: 行内 -i と -e(実行時上書き)
@@ -153,8 +153,8 @@ echo "HOGE={{ HOGE }} on {{ inventory_hostname }}"
 ### RB-EXPECTED
 ```
 rc == 0 and
-out("HOGE=ADHOC on db01") and out("HOGE=ADHOC on db02") and
-not out("HOGE=FUGA") and not out("web01|web02|web03|mon01") and
+all_out("HOGE=ADHOC on db01") and all_out("HOGE=ADHOC on db02") and
+not all_out("HOGE=FUGA") and not all_out("web01|web02|web03|mon01") and
 not out("UNREACHABLE|FAILED")
 ```
 

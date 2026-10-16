@@ -166,3 +166,16 @@ def test_diagnose_return_shape_unchanged():
     from runbook.criteria import diagnose
     result = diagnose('rc == 0 and out("A")', 0, "A", "")
     assert all(isinstance(r, tuple) and len(r) == 2 for r in result)
+
+
+def test_all_out_defaults_to_stdout():
+    assert evaluate('all_out("abc") and "abc" in all_stdout', 0, "xabcx", "")
+
+
+def test_all_out_uses_given_whole_output():
+    assert evaluate('not out("web02") and all_out("web02")', 0, "web01 ok", "",
+                    all_stdout="web01 ok\nweb02 ok")
+
+
+def test_validate_accepts_all_out():
+    validate('all_out("x") and all_stdout != ""')

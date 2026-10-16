@@ -37,7 +37,13 @@ from rich.text import Text
 from . import __version__, criteria, parser, render
 from .artifacts import RunArtifacts, atomic_write_text
 from .envstate import EnvManager
-from .executor import StepRecord, parse_ansible_host_results, run_command
+from .executor import (
+    ANSIBLE_RC_MARKER_RE,
+    StepRecord,
+    judge_ansible_hosts,
+    parse_ansible_host_results,
+    run_command,
+)
 from .render import (
     MASK,
     MUTED,
@@ -444,16 +450,30 @@ def cmd_run(args: argparse.Namespace) -> int:
             rec.started_at = started.isoformat(timespec="seconds")
             tree_item("開始", f"{started:%Y-%m-%d %H:%M:%S}", first=True)
 
+            # ansible ad-hoc ステップは RB-EXPECTED をホストごとに評価する
+            per_host = step.runner == "ansible"
             # D5: 逐次書き込み。シグナル中断時にも必ず close する。
             files = art.open_step_files(step.number)
             try:
                 def echo(line: str, is_stderr: bool) -> None:
                     text = mask(line.rstrip(chr(10)))
-                    # 案R5: stderr は赤。stdout は構造行(ホスト区切り・プレイ見出し・
-                    # 失敗行)だけ色を付け、本文は既定のまま流す。
-                    style = "red" if is_stderr else output_line_style(text)
-                    console.print(Text.assemble((OUTPUT_PREFIX, MUTED), Text(text, style=style or "")))
                     files.write(mask(line), is_stderr)
+                    remote_rc = None
+                    if per_host and not is_stderr:
+                        # リモート rc の目印は画面では「終了コード」行に置き換える
+                        # (ansible の見出し行は exit 0 のため常に rc=0 になるので、実際の値を示す)
+                        m = ANSIBLE_RC_MARKER_RE.search(text)
+                        if m:
+                            remote_rc = m.group(1)
+                            text = ANSIBLE_RC_MARKER_RE.sub("", text)
+                    if remote_rc is None or text.strip():
+                        # 案R5: stderr は赤。stdout は構造行(ホスト区切り・プレイ見出し・
+                        # 失敗行)だけ色を付け、本文は既定のまま流す。
+                        style = "red" if is_stderr else output_line_style(text, neutral_hosts=per_host)
+                        console.print(Text.assemble((OUTPUT_PREFIX, MUTED), Text(text, style=style or "")))
+                    if remote_rc is not None:
+                        console.print(Text.assemble((OUTPUT_PREFIX, MUTED),
+                                                    (f"(リモートの終了コード: {remote_rc})", MUTED)))
 
                 result = run_command(step.command, timeout=step.timeout, cwd=step.cwd,
                                      on_line=echo, env=envman.child_env(), capture_env=True)
@@ -476,7 +496,8 @@ def cmd_run(args: argparse.Namespace) -> int:
             # 日付は「実行開始」ヘッダに出ているので時刻のみ。日を跨いだ場合だけ日付を併記する。
             finished_disp = (f"{finished:%H:%M:%S}" if finished.date() == started.date()
                              else f"{finished:%Y-%m-%d %H:%M:%S}")
-            result_note = f"rc={result.rc}, {rec.duration}s, 終了 {finished_disp}"
+            rc_label = "ansible rc" if per_host else "rc"
+            result_note = f"{rc_label}={result.rc}, {rec.duration}s, 終了 {finished_disp}"
 
             # D4: 中断シグナルにより子プロセスが終了した場合(操作者の意図的中断のため
             # RB-ONFAIL は表示せず、判定・内訳もスキップする)
@@ -492,21 +513,36 @@ def cmd_run(args: argparse.Namespace) -> int:
                 exit_code = 128 + result.interrupted
                 break
 
+            judges = []
             if result.timed_out:
                 rec.status = "error"
                 rec.detail = f"タイムアウト({step.timeout}s)により強制終了"
             else:
                 try:
-                    ok = criteria.evaluate(step.criteria, result.rc, result.stdout, result.stderr)
-                    rec.status = "ok" if ok else "ng"
-                    if not ok:
-                        rec.detail = "正常性基準を満たしませんでした"
+                    if per_host:
+                        judges = judge_ansible_hosts(step.criteria, result.stdout, result.stderr)
+                    if judges:
+                        # ステップの合否とホスト別結果(マトリックス)を同じ評価結果から決める
+                        ng = [j for j in judges if j.status in ("failed", "unreachable")]
+                        rec.status = "ng" if ng else "ok"
+                        if ng:
+                            rec.detail = "正常性基準を満たさないホスト: " + ", ".join(
+                                f"{j.host}({j.reason or f'rc={j.rc}'})" for j in ng)
+                    else:
+                        ok = criteria.evaluate(step.criteria, result.rc, result.stdout, result.stderr)
+                        rec.status = "ok" if ok else "ng"
+                        if not ok:
+                            rec.detail = "正常性基準を満たしませんでした"
                 except criteria.CriteriaError as e:
                     rec.status = "error"
                     rec.detail = str(e)
 
             if step.runner in ("ansible", "playbook"):
-                rec.host_results = parse_ansible_host_results(result.stdout + "\n" + result.stderr)
+                if judges:
+                    rec.host_results = {j.host: j.status for j in judges}
+                    rec.host_rc = {j.host: j.rc for j in judges}
+                else:
+                    rec.host_results = parse_ansible_host_results(result.stdout + "\n" + result.stderr)
                 rec.host_matrix = step.host_matrix
                 if step.host_matrix and rec.host_results:
                     # 案R2: 1ステップ分は1次元なので表を組まず1行で出す
@@ -532,18 +568,29 @@ def cmd_run(args: argparse.Namespace) -> int:
                 art.log(f"判定: NG ({rec.detail})")
                 tree_item("詳細", rec.detail, style=NG)
                 # 提案1: 判定の詳細診断(どの条件で落ちたかの内訳)
-                if rec.status == "ng":
-                    breakdown = criteria.diagnose(step.criteria, result.rc, result.stdout, result.stderr)
+                # ホスト別評価では、基準を評価して NG になった最初のホストの内訳を出す
+                diag_host = next((j for j in judges if j.status == "failed" and j.rc is not None), None)
+                d_all = ANSIBLE_RC_MARKER_RE.sub("", result.stdout)
+                if diag_host is not None:
+                    d_rc, d_out, d_err = diag_host.rc, diag_host.output, result.stderr
+                else:
+                    d_rc, d_out, d_err = result.rc, result.stdout, result.stderr
+                if rec.status == "ng" and (diag_host is not None or not judges):
+                    breakdown = criteria.diagnose(step.criteria, d_rc, d_out, d_err, all_stdout=d_all)
                     if len(breakdown) >= 2:  # 条件が1つだけなら基準式そのものと同じ情報なので出さない
                         # 案R6: 各条件に「実際の出力はどうだったか」を添える
                         evid = {t: mask(criteria.term_evidence(
-                            t, result.rc, result.stdout, result.stderr)) for t, _ in breakdown}
+                            t, d_rc, d_out, d_err, all_stdout=d_all)) for t, _ in breakdown}
                         rec.criteria_breakdown = [
-                            {"expr": t, "ok": ok, "evidence": evid[t]} for t, ok in breakdown]
+                            {"expr": t, "ok": ok, "evidence": evid[t],
+                             **({"host": diag_host.host} if diag_host else {})}
+                            for t, ok in breakdown]
                         # 全角文字を含む条件式でも → の位置を揃えるため表示幅で計算する
                         width = max(cell_len(mask(t)) for t, _ in breakdown)
-                        art.log("判定内訳:")
+                        art.log("判定内訳:" + (f" (ホスト {diag_host.host})" if diag_host else ""))
                         rows = Text()
+                        if diag_host:
+                            rows.append(f"ホスト {diag_host.host}\n", style=MUTED)
                         for i, (text, ok) in enumerate(breakdown):
                             if i:
                                 rows.append("\n")

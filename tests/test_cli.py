@@ -3,6 +3,7 @@
 import json
 import os
 import re
+import shutil
 import signal
 import textwrap
 import threading
@@ -1088,3 +1089,81 @@ def test_no_color_option(tmp_path, capsys, monkeypatch):
     cli.main(["--no-color", "run", str(md), "--yes", "--operator", "山田",
               "--log-dir", str(tmp_path / "logs")])
     assert cli.console.no_color is True
+
+
+needs_ansible = pytest.mark.skipif(shutil.which("ansible") is None, reason="ansible が未インストール")
+
+# h1 はリモート rc=1(diff の「差分あり」相当)、h2 は rc=2 を返す
+_RC_BY_HOST_MD = """\
+    ## 終了コードの確認
+
+    ### RB-LOCALDEF
+    ```yaml
+    ansible:
+      inventory: hosts.ini
+      target: all
+      host_matrix: true
+    ```
+
+    ### RB-CMD
+    ```ansible
+    echo "on {{ inventory_hostname }}"
+    case "{{ inventory_hostname }}" in h1) false;; *) sh -c "exit 2";; esac
+    ```
+
+    ### RB-EXPECTED
+    ```
+    {criteria}
+    ```
+"""
+
+
+def _write_rc_by_host(tmp_path, criteria_expr):
+    (tmp_path / "hosts.ini").write_text(
+        "h1 ansible_connection=local\nh2 ansible_connection=local\n", encoding="utf-8")
+    return write_md(tmp_path, _RC_BY_HOST_MD.replace("{criteria}", criteria_expr))
+
+
+@needs_ansible
+def test_ansible_criteria_evaluated_per_host_with_remote_rc(tmp_path, capsys, monkeypatch):
+    """ansible ad-hoc の RB-EXPECTED はホストごとにリモート rc で評価し、
+    ステップの合否とホスト別結果が同じ評価から決まる"""
+    monkeypatch.chdir(tmp_path)
+    md = _write_rc_by_host(tmp_path, "rc == 0 or rc == 1")
+    rc = cli.main(["run", str(md), "--yes", "--operator", "t", "--log-dir", str(tmp_path / "logs")])
+    out = capsys.readouterr().out
+    assert rc == 1
+    assert "h1=O h2=X" in out
+    assert "正常性基準を満たさないホスト: h2(rc=2)" in out
+    assert "(リモートの終了コード: 1)" in out and "(リモートの終了コード: 2)" in out
+    assert "__RUNBOOK_RC" not in out  # 目印は画面に出さない
+    _, result = read_result(tmp_path / "logs")
+    step = result["steps"][0]
+    assert step["status"] == "ng"
+    assert step["host_results"] == {"h1": "ok", "h2": "failed"}
+    assert step["host_rc"] == {"h1": 1, "h2": 2}
+
+
+@needs_ansible
+def test_ansible_rc_range_lets_all_hosts_pass(tmp_path, capsys, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    md = _write_rc_by_host(tmp_path, '(rc == 1 or rc == 2)' +
+                           ' and out("on h") and all_out("on h1") and all_out("on h2")')
+    rc = cli.main(["run", str(md), "--yes", "--operator", "t", "--log-dir", str(tmp_path / "logs")])
+    out = capsys.readouterr().out
+    assert rc == 0, out
+    assert "h1=O h2=O" in out
+
+
+@needs_ansible
+def test_ansible_breakdown_names_failed_host(tmp_path, capsys, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    md = _write_rc_by_host(tmp_path, 'rc == 1 and out("on h1")')
+    rc = cli.main(["run", str(md), "--yes", "--operator", "t", "--log-dir", str(tmp_path / "logs")])
+    out = capsys.readouterr().out
+    assert rc == 1
+    assert "ホスト h2" in out
+    _, result = read_result(tmp_path / "logs")
+    breakdown = result["steps"][0]["criteria_breakdown"]
+    assert {b["host"] for b in breakdown} == {"h2"}
+    assert [b["ok"] for b in breakdown] == [False, False]
